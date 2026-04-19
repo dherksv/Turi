@@ -5,23 +5,63 @@ dict and returns a result dict.
 These are stubs for now. Replace the body of each function
 as you build each real tool.
 """
+import re
+import os
+from dotenv import load_dotenv
+from tools.search import search_web, results_to_context
+from tools.reminder import build_reminder_intent
+
+load_dotenv()
+
 
 async def set_reminder(intent: dict) -> dict:
-    entities = intent.get("entities", {})
-    time_refs = entities.get("time_refs", [])
+    """Parse reminder details — actual saving happens after user confirms."""
+    parsed = build_reminder_intent(intent)
+
+    if not parsed["has_time"]:
+        return {
+            "status":   "needs_time",
+            "task":     parsed["task"],
+            "message":  f"I understood you want to be reminded to: "
+                        f"'{parsed['task']}' — but when? "
+                        f"Please tell me a time or day."
+        }
+
+    from tools.reminder import format_remind_at
+    human_time = format_remind_at(parsed["remind_at"])
+
     return {
-        "status":  "stub",
-        "message": f"[set_reminder] would schedule: '{intent['text']}'",
-        "time_refs": time_refs,
-        "note":    "reminder tool not yet connected"
+        "status":    "ready_to_confirm",
+        "task":      parsed["task"],
+        "remind_at": parsed["remind_at"],
+        "human_time": human_time,
+        "message":   f"Set a reminder to '{parsed['task']}' "
+                     f"on {human_time}?"
     }
 
-
 async def web_search(intent: dict) -> dict:
+    """Real web search via SearXNG."""
+    query = intent["text"]
+
+    # strip command verb prefix
+    query = re.sub(
+        r'^(search(\s+about)?\s+|find\s+|look\s+up\s+|google\s+|browse\s+)',
+        '', query, flags=re.IGNORECASE
+    ).strip()
+
+    if not query:
+        query = intent["text"]
+
+    result = await search_web(query, num_results=5)
+    context_str = results_to_context(result)
+
     return {
-        "status":  "stub",
-        "message": f"[web_search] would search for: '{intent['text']}'",
-        "note":    "search tool not yet connected"
+        "status":      result["status"],
+        "query":       query,
+        "context_str": context_str,
+        "count":       result.get("count", 0),
+        "raw_results": result.get("results", []),
+        "message":     context_str
     }
 
 

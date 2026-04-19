@@ -4,6 +4,12 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional
 import uuid
+import asyncio
+from scheduler import reminder_loop
+from memory import (
+    init_db, save_message, get_history,
+    get_all_sessions, get_reminders_for_session
+)
 
 from memory import init_db, save_message, get_history, get_all_sessions
 from llm import chat, health_check
@@ -63,26 +69,36 @@ async def health():
 # replace only the chat_endpoint function:
 
 @app.post("/chat", response_model=ChatResponse)
+
 async def chat_endpoint(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "empty message")
 
-    # 1. normalize
     normalized = normalize(req.message)
+    intent     = classify(normalized)
 
-    # 2. classify intent
-    intent = classify(normalized)
+    print(f"\n[CHAT] '{req.message}'")
+    print(f"[CHAT] classified → {intent['intent_type']} | tool={intent['tool']} | conf={intent['confidence']}")
 
-    # 3. route to LLM or tool
     result = await route(intent, req.session_id)
+    reply  = result["reply"]
 
-    reply = result["reply"]
-
-    # 4. persist
     save_message(req.session_id, "user",      req.message)
     save_message(req.session_id, "assistant", reply)
 
-    return ChatResponse(session_id=req.session_id, reply=reply)
+    # return extra debug info alongside the reply
+    return {
+        "session_id":  req.session_id,
+        "reply":       reply,
+        "debug": {
+            "intent_type": result.get("intent_type"),
+            "tool":        result.get("tool"),
+            "routed_to":   result.get("routed_to"),
+            "confidence":  result.get("confidence"),
+            "tool_status": result.get("tool_result", {}).get("status"),
+            "result_count": result.get("tool_result", {}).get("count", 0),
+        }
+    }
 
 
 # add this debug endpoint — very useful during development
@@ -147,3 +163,22 @@ async def direct_search(q: str, n: int = 5):
     """Direct search endpoint — test SearXNG without going through chat."""
     result = await search_web(q, num_results=n)
     return result
+# ── reminder ─────────────────────────────────────────
+
+# add to startup event
+@app.on_event("startup")
+async def startup():
+    init_db()
+    # seed facts — comment out after first run
+    store_user_fact("User prefers concise responses")
+    store_user_fact("User is building a multi-agent AI assistant")
+    store_user_fact("User is based in Thiruvananthapuram Kerala India")
+    # start background reminder checker
+    asyncio.create_task(reminder_loop())
+
+
+# add this endpoint alongside existing ones
+@app.get("/reminders/{session_id}")
+async def list_reminders(session_id: str):
+    """See all reminders for a session."""
+    return {"reminders": get_reminders_for_session(session_id)}
