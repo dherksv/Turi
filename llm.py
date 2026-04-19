@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from context import build_system_prompt
 
 load_dotenv()
-LLAMA_URL  = os.getenv("LLAMA_SERVER_URL", "http://localhost:8081")
+LLAMA_URL  = os.getenv("LLAMA_SERVER_URL", "http://127.0.0.1:8081")
 MODEL_NAME = os.getenv("MODEL_NAME", "gemma-4-E2B-it-Q4_K_M")
 
 

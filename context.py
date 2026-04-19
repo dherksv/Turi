@@ -15,9 +15,16 @@ TIMEZONE     = os.getenv("USER_TIMEZONE", "UTC")
 
 def load_profile() -> dict:
     path = Path(PROFILE_PATH)
-    if path.exists():
-        return json.loads(path.read_text())
-    return {}
+    if not path.exists():
+        return {}
+    content = path.read_text().strip()
+    if not content:
+        return {}
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        print(f"Warning: user_profile.json is not valid JSON — using empty profile")
+        return {}
 
 
 def get_runtime_context() -> str:

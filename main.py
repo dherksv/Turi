@@ -8,6 +8,28 @@ import uuid
 from memory import init_db, save_message, get_history, get_all_sessions
 from llm import chat, health_check
 from vector_memory import store_user_fact, store_conversation_summary, retrieve
+from normalizer import normalize
+from intent import classify
+from router import route
+
+
+# ── models ────────────────────────────────────────────────────
+
+class ChatRequest(BaseModel):
+    session_id: str
+    message:    str
+
+class ChatResponse(BaseModel):
+    session_id: str
+    reply:      str
+
+class MemoryRequest(BaseModel):
+    fact: str
+
+class SummaryRequest(BaseModel):
+    session_id: str
+    summary:    str
+
 
 app = FastAPI(title="Personal Assistant")
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -36,36 +58,40 @@ async def health():
 
 # ── chat ──────────────────────────────────────────────────────
 
-class ChatRequest(BaseModel):
-    session_id: str
-    message:    str
 
-class ChatResponse(BaseModel):
-    session_id: str
-    reply:      str
+
+# replace only the chat_endpoint function:
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(req: ChatRequest):
     if not req.message.strip():
         raise HTTPException(400, "empty message")
 
-    # load history
-    history = get_history(req.session_id, limit=10)
+    # 1. normalize
+    normalized = normalize(req.message)
 
-    # append current message to history for LLM
-    history.append({"role": "user", "content": req.message})
+    # 2. classify intent
+    intent = classify(normalized)
 
-    # call LLM — now passes user_message for memory retrieval
-    reply = await chat(
-        messages     = history,
-        user_message = req.message
-    )
+    # 3. route to LLM or tool
+    result = await route(intent, req.session_id)
 
-    # persist both turns
+    reply = result["reply"]
+
+    # 4. persist
     save_message(req.session_id, "user",      req.message)
     save_message(req.session_id, "assistant", reply)
 
     return ChatResponse(session_id=req.session_id, reply=reply)
+
+
+# add this debug endpoint — very useful during development
+@app.post("/debug/classify")
+async def debug_classify(req: ChatRequest):
+    """See exactly how a message gets classified — no LLM call."""
+    normalized = normalize(req.message)
+    intent     = classify(normalized)
+    return intent
 
 
 # ── memory management endpoints ───────────────────────────────
@@ -111,3 +137,13 @@ async def get_session_history(session_id: str):
 @app.post("/session/new")
 async def new_session():
     return {"session_id": str(uuid.uuid4())}
+
+# ── tool endpoints ─────────────────────────────────────────
+
+from tools.search import search_web, results_to_context
+
+@app.get("/search")
+async def direct_search(q: str, n: int = 5):
+    """Direct search endpoint — test SearXNG without going through chat."""
+    result = await search_web(q, num_results=n)
+    return result
