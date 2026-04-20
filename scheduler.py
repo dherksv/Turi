@@ -22,20 +22,31 @@ async def _fire_reminder(reminder: dict):
     for cb in _notification_callbacks:
         await cb(reminder["session_id"], msg)
 
-async def reminder_loop():
-    """Runs in background — checks every 30 seconds."""
-    print("[SCHEDULER] started — checking reminders every 30s")
+async def reminder_loop(sse_manager):
+    """Background loop — checks reminders every 30 seconds."""
+    print("[SCHEDULER] started — checking every 30s")
     tz = pytz.timezone(TIMEZONE)
+
     while True:
         try:
-            now      = datetime.now(tz)
-            pending  = get_pending_reminders()
+            now     = datetime.now(tz)
+            pending = get_pending_reminders()
+
             for r in pending:
                 remind_at = datetime.fromisoformat(
                     r["remind_at"]
                 ).astimezone(tz)
+
                 if now >= remind_at:
-                    await _fire_reminder(r)
+                    print(f"[SCHEDULER] firing: {r['task']}")
+                    mark_reminder_fired(r["id"])
+
+                    # push to browser via SSE
+                    await sse_manager.push_reminder(
+                        r["session_id"], r["task"]
+                    )
+
         except Exception as e:
             print(f"[SCHEDULER] error: {e}")
+
         await asyncio.sleep(30)

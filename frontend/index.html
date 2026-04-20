@@ -295,9 +295,193 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); }
   ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+  /* ── notification popup ────────────────────────────────── */
+  #notification-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+  }
+
+  .notification-popup {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    padding: 14px 18px;
+    min-width: 280px;
+    max-width: 360px;
+    pointer-events: all;
+    animation: slideIn 0.25s ease;
+    position: relative;
+    box-shadow: 0 4px 24px rgba(0,229,160,0.15);
+  }
+
+  .notification-popup.warning {
+    border-color: #FAC775;
+    box-shadow: 0 4px 24px rgba(250,199,117,0.15);
+  }
+
+  .notification-popup.error {
+    border-color: var(--danger);
+    box-shadow: 0 4px 24px rgba(255,68,68,0.15);
+  }
+
+  @keyframes slideIn {
+    from { opacity:0; transform: translateX(20px); }
+    to   { opacity:1; transform: translateX(0); }
+  }
+
+  @keyframes slideOut {
+    from { opacity:1; transform: translateX(0); }
+    to   { opacity:0; transform: translateX(20px); }
+  }
+
+  .notification-popup .notif-header {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+
+  .notification-popup.warning .notif-header { color: #FAC775; }
+  .notification-popup.error   .notif-header { color: var(--danger); }
+
+  .notification-popup .notif-body {
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  .notification-popup .notif-close {
+    position: absolute;
+    top: 8px; right: 10px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+  }
+  .notification-popup .notif-close:hover { color: var(--text); }
+
+  .notification-popup .notif-progress {
+    position: absolute;
+    bottom: 0; left: 0;
+    height: 2px;
+    background: var(--accent);
+    animation: progress linear forwards;
+  }
+
+  .notification-popup.warning .notif-progress { background: #FAC775; }
+  .notification-popup.error   .notif-progress { background: var(--danger); }
+
+  @keyframes progress {
+    from { width: 100%; }
+    to   { width: 0%; }
+  }
+
+  /* sse status indicator */
+  #sse-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    display: inline-block;
+    margin-right: 4px;
+  }
+  #sse-dot.connected  { background: var(--accent); }
+  #sse-dot.error      { background: var(--danger); }
+
+  /* ── voice controls ─────────────────────────────────────── */
+  #voice-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  #mic-btn {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 16px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  #mic-btn:hover          { border-color: var(--accent); color: var(--accent); }
+  #mic-btn.recording      {
+    border-color: var(--danger);
+    background: rgba(255,68,68,0.1);
+    color: var(--danger);
+    animation: pulse 1s infinite;
+  }
+  #mic-btn.processing     { border-color: #FAC775; color: #FAC775; }
+
+  @keyframes pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,68,68,0.4); }
+    50%     { box-shadow: 0 0 0 6px rgba(255,68,68,0); }
+  }
+
+  #voice-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    padding: 4px 8px;
+    cursor: pointer;
+    outline: none;
+  }
+  #voice-select:focus { border-color: var(--accent); }
+
+  #tts-btn {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-dim);
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+  #tts-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #tts-btn.speaking {
+    border-color: var(--accent);
+    color: var(--accent);
+    animation: pulse-green 1s infinite;
+  }
+  @keyframes pulse-green {
+    0%,100% { box-shadow: 0 0 0 0 rgba(0,229,160,0.4); }
+    50%     { box-shadow: 0 0 0 5px rgba(0,229,160,0); }
+  }
+
+  #voice-status {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text-dim);
+    min-width: 80px;
+  }
+
+  /* audio player — hidden, used for autoplay */
+  #audio-player { display: none; }
 </style>
 </head>
 <body>
+
 
 <!-- Sidebar -->
 <div id="sidebar">
@@ -328,24 +512,144 @@
   </div>
 
   <div id="input-area">
+
+    <!-- voice controls -->
+    <div id="voice-controls">
+      <button id="mic-btn"
+              onclick="toggleRecording()"
+              title="Hold to record voice">🎤</button>
+      <select id="voice-select" onchange="onVoiceChange(this.value)">
+        <option value="orion">Orion ♂</option>
+        <option value="lyra">Lyra ♀</option>
+      </select>
+      <span id="voice-status">ready</span>
+    </div>
+
+    <!-- text input -->
     <div id="input-wrap">
       <textarea
         id="message-input"
-        placeholder="type a message... (enter to send, shift+enter for newline)"
+        placeholder="type or use mic..."
         rows="1"
         maxlength="4000"
       ></textarea>
       <span id="char-count">0 / 4000</span>
     </div>
+
+    <!-- speak last reply button -->
+    <button id="tts-btn"
+            onclick="speakLastReply()"
+            title="Speak last reply">🔊</button>
+
+    <!-- send button -->
     <button id="send-btn" onclick="sendMessage()" disabled>↑</button>
+
+    <!-- hidden audio player -->
+    <audio id="audio-player" autoplay></audio>
   </div>
-</div>
 
 <script>
   let currentSession = null;
   let isWaiting      = false;
+  let sseSource      = null;
 
-  // ── session management ─────────────────────────────────
+  // ── notification system ────────────────────────────────────
+  function showNotification(message, type = 'info', duration = 6000) {
+    const container = document.getElementById('notification-container');
+
+    const popup = document.createElement('div');
+    popup.className = `notification-popup ${type === 'reminder' ? '' : type}`;
+
+    const labels = {
+      reminder:     '⏰ reminder',
+      info:         '◈ notice',
+      warning:      '⚠ warning',
+      error:        '✗ error',
+    };
+
+    popup.innerHTML = `
+      <div class="notif-header">${labels[type] || '◈ notice'}</div>
+      <div class="notif-body">${message}</div>
+      <button class="notif-close" onclick="this.parentElement.remove()">×</button>
+      <div class="notif-progress" style="animation-duration: ${duration}ms"></div>
+    `;
+
+    container.appendChild(popup);
+
+    // request browser notification permission + show if granted
+    if (type === 'reminder' && Notification.permission === 'granted') {
+      new Notification('Assistant Reminder', { body: message });
+    }
+
+    // auto-dismiss
+    setTimeout(() => {
+      popup.style.animation = 'slideOut 0.25s ease forwards';
+      setTimeout(() => popup.remove(), 250);
+    }, duration);
+  }
+
+  function requestNotificationPermission() {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }
+
+  // ── SSE connection ─────────────────────────────────────────
+  function connectSSE(sessionId) {
+    if (sseSource) {
+      sseSource.close();
+      sseSource = null;
+    }
+
+    const sseDot = document.getElementById('sse-dot');
+    sseSource = new EventSource(`/events/${sessionId}`);
+
+    sseSource.onopen = () => {
+      console.log('[SSE] connected');
+      if (sseDot) {
+        sseDot.className = 'connected';
+      }
+    };
+
+    sseSource.onmessage = (e) => {
+      try {
+        const event = JSON.parse(e.data);
+        console.log('[SSE] event:', event);
+
+        if (event.type === 'reminder') {
+          showNotification(event.data.task, 'reminder', 8000);
+          // also append reminder as a chat message
+          appendMessage(
+            'assistant',
+            `⏰ Reminder: ${event.data.task}`
+          );
+        } else if (event.type === 'notification') {
+          showNotification(
+            event.data.message,
+            event.data.level || 'info'
+          );
+        } else if (event.type === 'ping') {
+          // keepalive — ignore
+        } else if (event.type === 'connected') {
+          console.log('[SSE] session confirmed:', event.session_id);
+        }
+      } catch (err) {
+        console.error('[SSE] parse error:', err);
+      }
+    };
+
+    sseSource.onerror = () => {
+      console.warn('[SSE] connection lost — reconnecting in 5s');
+      if (sseDot) sseDot.className = 'error';
+      sseSource.close();
+      // auto-reconnect
+      setTimeout(() => {
+        if (currentSession) connectSSE(currentSession);
+      }, 5000);
+    };
+  }
+
+  // ── session management ─────────────────────────────────────
   async function newSession() {
     const res  = await fetch('/session/new', { method: 'POST' });
     const data = await res.json();
@@ -355,6 +659,8 @@
     loadSessions();
     document.getElementById('send-btn').disabled = false;
     document.getElementById('message-input').focus();
+    connectSSE(currentSession);
+    requestNotificationPermission();
   }
 
   async function loadSession(sessionId) {
@@ -370,10 +676,12 @@
     }
     scrollToBottom();
 
-    // mark active
     document.querySelectorAll('.session-item').forEach(el => {
       el.classList.toggle('active', el.dataset.id === sessionId);
     });
+
+    connectSSE(sessionId);
+    requestNotificationPermission();
   }
 
   async function loadSessions() {
@@ -382,12 +690,12 @@
     const list = document.getElementById('sessions-list');
     list.innerHTML = '';
     for (const sid of data.sessions) {
-      const el       = document.createElement('div');
-      el.className   = 'session-item' + (sid === currentSession ? ' active' : '');
-      el.dataset.id  = sid;
+      const el      = document.createElement('div');
+      el.className  = 'session-item' + (sid === currentSession ? ' active' : '');
+      el.dataset.id = sid;
       el.textContent = sid.slice(0, 8) + '…';
-      el.title       = sid;
-      el.onclick     = () => loadSession(sid);
+      el.title      = sid;
+      el.onclick    = () => loadSession(sid);
       list.appendChild(el);
     }
   }
@@ -397,7 +705,7 @@
       currentSession ? currentSession.slice(0, 8) + '…' : '—';
   }
 
-  // ── messaging ──────────────────────────────────────────
+  // ── messaging ──────────────────────────────────────────────
   async function sendMessage() {
     if (!currentSession || isWaiting) return;
     const input = document.getElementById('message-input');
@@ -417,14 +725,41 @@
       const res  = await fetch('/chat', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ session_id: currentSession, message: text })
+        body:    JSON.stringify({
+          session_id: currentSession,
+          message:    text
+        })
       });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
       const data = await res.json();
       hideTyping();
       appendMessage('assistant', data.reply);
+      lastReplyText = data.reply;
+
+      // show debug info if tool was used
+      if (data.debug?.tool) {
+        console.log('[DEBUG]', data.debug);
+        if (data.debug.routed_to === 'tool') {
+          const statusIcon = data.debug.tool_status === 'ok' ? '✓' : '⚠';
+          showNotification(
+            `${statusIcon} ${data.debug.tool} — ${data.debug.tool_status}`,
+            data.debug.tool_status === 'ok' ? 'info' : 'warning',
+            2500
+          );
+        }
+      }
+
     } catch (err) {
       hideTyping();
-      appendMessage('assistant', '⚠ Could not reach the backend. Is the server running?');
+      appendMessage(
+        'assistant',
+        '⚠ Could not reach the backend. Is the server running?'
+      );
+      showNotification(err.message, 'error', 4000);
     }
 
     isWaiting = false;
@@ -450,7 +785,6 @@
     bubble.textContent = content;
 
     if (!animate) wrapper.style.animation = 'none';
-
     wrapper.appendChild(label);
     wrapper.appendChild(bubble);
     msgs.appendChild(wrapper);
@@ -459,19 +793,18 @@
 
   let typingEl = null;
   function showTyping() {
-    const msgs  = document.getElementById('messages');
-    const wrap  = document.createElement('div');
+    const msgs = document.getElementById('messages');
+    const wrap = document.createElement('div');
     wrap.className = 'message assistant';
     wrap.id = 'typing-wrap';
-
-    const label   = document.createElement('div');
+    const label = document.createElement('div');
     label.className = 'msg-label';
     label.textContent = 'assistant';
-
-    typingEl    = document.createElement('div');
+    typingEl = document.createElement('div');
     typingEl.className = 'typing-indicator';
-    typingEl.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
-
+    typingEl.innerHTML = '<div class="typing-dot"></div>'
+                       + '<div class="typing-dot"></div>'
+                       + '<div class="typing-dot"></div>';
     wrap.appendChild(label);
     wrap.appendChild(typingEl);
     msgs.appendChild(wrap);
@@ -484,8 +817,7 @@
   }
 
   function clearMessages() {
-    const msgs = document.getElementById('messages');
-    msgs.innerHTML = '';
+    document.getElementById('messages').innerHTML = '';
   }
 
   function scrollToBottom() {
@@ -499,16 +831,14 @@
       count ? `${count} messages` : '';
   }
 
-  // ── input handling ─────────────────────────────────────
+  // ── input handling ─────────────────────────────────────────
   const input = document.getElementById('message-input');
-
   input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
   });
-
   input.addEventListener('input', () => {
     autoResize(input);
     updateCharCount(input.value);
@@ -520,33 +850,280 @@
   }
 
   function updateCharCount(val) {
-    document.getElementById('char-count').textContent = `${val.length} / 4000`;
+    document.getElementById('char-count').textContent =
+      `${val.length} / 4000`;
   }
 
-  // ── health check ───────────────────────────────────────
+  // ── health check ───────────────────────────────────────────
   async function checkHealth() {
-    try {
-      const res  = await fetch('/health');
-      const data = await res.json();
-      const dot  = document.getElementById('status-dot');
-      const txt  = document.getElementById('status-text');
-      if (data.llm === 'ok') {
-        dot.className = 'online';
-        txt.textContent = 'llm online';
-      } else {
-        dot.className = 'offline';
-        txt.textContent = 'llm offline';
-      }
-    } catch {
-      document.getElementById('status-dot').className = 'offline';
-      document.getElementById('status-text').textContent = 'api offline';
+  try {
+    const res  = await fetch('/health/detail');
+    const data = await res.json();
+
+    // chat agent dot
+    const dot  = document.getElementById('status-dot');
+    const txt  = document.getElementById('status-text');
+    const chatOk = data.chat_agent?.status === 'ok';
+    dot.className   = chatOk ? 'online' : 'offline';
+    txt.textContent = chatOk ? 'chat online' : `chat: ${data.chat_agent?.status}`;
+
+    // fast agent dot
+    const fastDot  = document.getElementById('fast-dot');
+    const fastTxt  = document.getElementById('fast-text');
+    const fastOk   = data.fast_agent?.status === 'ok';
+    fastDot.style.background = fastOk
+      ? 'var(--accent)'
+      : data.fast_agent?.status === 'connection_refused'
+        ? 'var(--danger)'
+        : '#FAC775';
+    fastTxt.textContent = fastOk
+      ? 'fast online'
+      : `fast: ${data.fast_agent?.status}`;
+    fastTxt.style.color = fastOk ? 'var(--accent-dim)' : 'var(--text-dim)';
+
+  } catch {
+    document.getElementById('status-dot').className = 'offline';
+    document.getElementById('status-text').textContent = 'api offline';
+  }
+}
+
+  // update sidebar to show SSE dot
+document.getElementById('status-bar').innerHTML = `
+  <div style="display:flex;flex-direction:column;gap:6px;width:100%">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div id="status-dot"></div>
+      <span id="status-text" style="font-size:11px">checking...</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div id="fast-dot" style="width:6px;height:6px;border-radius:50%;background:var(--text-dim)"></div>
+      <span id="fast-text" style="font-size:11px;color:var(--text-dim)">fast agent...</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div id="sse-dot"></div>
+      <span style="font-size:11px;color:var(--text-dim)">sse stream</span>
+    </div>
+  </div>
+`;
+// ── voice system ───────────────────────────────────────────
+  let mediaRecorder   = null;
+  let audioChunks     = [];
+  let isRecording     = false;
+  let currentVoice    = 'orion';
+  let lastReplyText   = '';
+  let autoSpeak       = false;
+
+  function onVoiceChange(voice) {
+    currentVoice = voice;
+    console.log('[VOICE] switched to:', voice);
+  }
+
+  async function toggleRecording() {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      await startRecording();
     }
   }
 
-  // ── init ───────────────────────────────────────────────
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(
+        { audio: true }
+      );
+
+      audioChunks  = [];
+      mediaRecorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm;codecs=opus'
+      });
+
+      mediaRecorder.ondataavailable = e => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        await processRecording();
+      };
+
+      mediaRecorder.start(100);  // collect in 100ms chunks
+      isRecording = true;
+
+      const btn = document.getElementById('mic-btn');
+      btn.className   = 'recording';
+      btn.textContent = '⏹';
+      document.getElementById('voice-status').textContent = 'recording...';
+
+    } catch (err) {
+      console.error('[VOICE] mic error:', err);
+      showNotification(
+        'Microphone access denied. Please allow mic access.',
+        'error', 4000
+      );
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      isRecording = false;
+      const btn = document.getElementById('mic-btn');
+      btn.className   = 'processing';
+      btn.textContent = '⏳';
+      document.getElementById('voice-status').textContent = 'processing...';
+    }
+  }
+
+  async function processRecording() {
+    if (!currentSession) {
+      showNotification('Start a session first', 'warning', 3000);
+      resetMicBtn();
+      return;
+    }
+
+    const blob    = new Blob(audioChunks, { type: 'audio/webm' });
+    const formData = new FormData();
+    formData.append('audio',      blob, 'recording.webm');
+    formData.append('session_id', currentSession);
+    formData.append('voice',      currentVoice);
+    formData.append('speak_reply', autoSpeak ? 'true' : 'false');
+
+    try {
+      // show user is speaking
+      document.getElementById('voice-status').textContent = 'thinking...';
+
+      const res  = await fetch('/voice/chat', {
+        method: 'POST',
+        body:   formData
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        showNotification(
+          data.error || 'Could not understand audio',
+          'warning', 3000
+        );
+        resetMicBtn();
+        return;
+      }
+
+      // show transcribed text in chat
+      appendMessage('user', `🎤 ${data.heard}`);
+      appendMessage('assistant', data.reply);
+      lastReplyText = data.reply;
+
+      // play audio response if available
+      if (data.audio_b64) {
+        playAudioB64(data.audio_b64);
+      }
+
+      showNotification(
+        `heard: "${data.heard.slice(0, 40)}..."`,
+        'info', 2500
+      );
+
+    } catch (err) {
+      console.error('[VOICE] error:', err);
+      showNotification('Voice chat failed: ' + err.message, 'error', 4000);
+    }
+
+    resetMicBtn();
+  }
+
+  function resetMicBtn() {
+    isRecording = false;
+    const btn   = document.getElementById('mic-btn');
+    btn.className   = '';
+    btn.textContent = '🎤';
+    document.getElementById('voice-status').textContent = 'ready';
+  }
+
+  async function speakLastReply() {
+    if (!lastReplyText) {
+      showNotification('No reply to speak yet', 'info', 2000);
+      return;
+    }
+    await speakText(lastReplyText, currentVoice);
+  }
+
+  async function speakText(text, voice = 'orion') {
+    const btn = document.getElementById('tts-btn');
+    btn.className   = 'speaking';
+    btn.textContent = '🔊';
+
+    try {
+      const formData = new FormData();
+      formData.append('text',  text);
+      formData.append('voice', voice);
+
+      const res = await fetch('/voice/speak', {
+        method: 'POST',
+        body:   formData
+      });
+
+      if (!res.ok) {
+        showNotification('TTS failed — is Piper installed?', 'warning', 4000);
+        return;
+      }
+
+      const audioBlob = await res.blob();
+      const audioUrl  = URL.createObjectURL(audioBlob);
+      const player    = document.getElementById('audio-player');
+      player.src      = audioUrl;
+      player.play();
+
+      player.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        btn.className   = '';
+        btn.textContent = '🔊';
+      };
+
+    } catch (err) {
+      console.error('[TTS] error:', err);
+      showNotification('TTS error: ' + err.message, 'error', 3000);
+      btn.className   = '';
+      btn.textContent = '🔊';
+    }
+  }
+
+  function playAudioB64(b64string) {
+    const binary  = atob(b64string);
+    const bytes   = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const blob    = new Blob([bytes], { type: 'audio/wav' });
+    const url     = URL.createObjectURL(blob);
+    const player  = document.getElementById('audio-player');
+    player.src    = url;
+    player.play();
+    player.onended = () => URL.revokeObjectURL(url);
+  }
+
+  // load available voices on startup
+  async function loadVoices() {
+    try {
+      const res  = await fetch('/voice/voices');
+      const data = await res.json();
+      const sel  = document.getElementById('voice-select');
+      sel.innerHTML = '';
+      for (const v of data.voices) {
+        const opt   = document.createElement('option');
+        opt.value   = v.key;
+        opt.textContent = `${v.name} ${v.gender === 'male' ? '♂' : '♀'}`
+                        + (v.available ? '' : ' ✗');
+        opt.disabled = !v.available;
+        sel.appendChild(opt);
+      }
+    } catch (err) {
+      console.warn('[VOICE] could not load voices:', err);
+    }
+  }
+  // ── init ───────────────────────────────────────────────────
   checkHealth();
   setInterval(checkHealth, 15000);
   loadSessions();
+  loadVoices();
 </script>
+<div id="notification-container"></div>
 </body>
 </html>
