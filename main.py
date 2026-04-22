@@ -15,6 +15,7 @@ from llm import chat, stream_chat, health_check
 from mcp import init_mcp
 from mcp import call as mcp_call, list_servers as mcp_list
 from pipeline import init_audit_db, generate_report, audit_log
+from typing import Optional
 
 from debug_logger import (
     log_event, log_classification,
@@ -79,6 +80,112 @@ async def root():
 async def health():
     agents = await health_check()
     return {"api": "ok", **agents}
+
+
+# ── task cancellation system ──────────────────────────────────
+_active_tasks: dict[str, asyncio.Task] = {}
+_cancelled_sessions: set[str]          = set()
+
+
+def register_task(session_id: str, task: asyncio.Task):
+    _active_tasks[session_id] = task
+
+
+def cancel_session(session_id: str):
+    _cancelled_sessions.add(session_id)
+    task = _active_tasks.get(session_id)
+    if task and not task.done():
+        task.cancel()
+        print(f"[STOP] cancelled task for session {session_id[:8]}")
+
+
+def is_cancelled(session_id: str) -> bool:
+    return session_id in _cancelled_sessions
+
+
+def clear_cancel(session_id: str):
+    _cancelled_sessions.discard(session_id)
+    _active_tasks.pop(session_id, None)
+
+
+@app.post("/stop/{session_id}")
+async def stop_task(session_id: str):
+    """Stop whatever the assistant is currently doing."""
+    cancel_session(session_id)
+    await sse_manager.push_notification(
+        session_id, "Task stopped.", "info"
+    )
+    return {"stopped": True, "session_id": session_id}
+
+
+@app.post("/voice/wake")
+async def check_wake_word(
+    audio: UploadFile = File(...)
+) -> dict:
+    """
+    Lightweight endpoint — just checks if audio
+    contains the Turi wake word. No full processing.
+    """
+    from voice.stt import transcribe, WAKE_WORD_PATTERN
+
+    audio_bytes = await audio.read()
+    result      = transcribe(audio_bytes, extension="webm")
+
+    return {
+        "wake_detected": result.get("wake_detected", False),
+        "heard":         result.get("text", ""),
+        "success":       result.get("success", False)
+    }
+
+
+@app.get("/turing/facts")
+async def turing_facts():
+    """Alan Turing facts — for the about page."""
+    return {
+        "name":   "Alan Mathison Turing",
+        "dates":  "23 June 1912 – 7 June 1954",
+        "title":  "Father of Computer Science and AI",
+        "facts":  [
+            {
+                "category": "Computing",
+                "fact": (
+                    "Invented the Turing Machine in 1936 — "
+                    "the theoretical model all computers are based on"
+                )
+            },
+            {
+                "category": "Codebreaking",
+                "fact": (
+                    "Led the team that broke the Nazi Enigma cipher "
+                    "at Bletchley Park, credited with shortening "
+                    "WWII by up to two years"
+                )
+            },
+            {
+                "category": "Artificial Intelligence",
+                "fact": (
+                    "Proposed the Turing Test in 1950 — "
+                    "still the defining question of machine intelligence"
+                )
+            },
+            {
+                "category": "Legacy",
+                "fact": (
+                    "The ACM Turing Award is computing's Nobel Prize. "
+                    "Every computer ever built owes its existence "
+                    "to his theoretical work."
+                )
+            },
+            {
+                "category": "Injustice",
+                "fact": (
+                    "Prosecuted for his sexuality in 1952. "
+                    "Received a posthumous royal pardon in 2013. "
+                    "A debt that can never be repaid."
+                )
+            }
+        ]
+    }
 
 
 # ── SSE endpoint ──────────────────────────────────────────────
@@ -397,10 +504,17 @@ async def chat_stream(req: ChatRequest):
                 user_message = req.message,
                 input_mode   = "text"
             ):
+                # check if cancelled
+                if is_cancelled(req.session_id):
+                    clear_cancel(req.session_id)
+                    yield (f"data: {_json.dumps({'stopped': True})}"
+                           f"\n\n")
+                    return
+
                 full_reply.append(chunk)
                 yield (f"data: {_json.dumps({'chunk': chunk})}"
                        f"\n\n")
-
+                
             llm_ms   = int((time.time() - llm_start) * 1000)
             complete = "".join(full_reply)
 

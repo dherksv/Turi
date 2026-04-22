@@ -7,6 +7,7 @@
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
 
+
   :root {
     --bg:        #0d0d0d;
     --surface:   #161616;
@@ -29,6 +30,184 @@
     height: 100vh;
     display: flex;
     overflow: hidden;
+  }
+  /* ── Turi logo watermark ────────────────────────────────── */
+  #chat-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    opacity: 0.50;
+    user-select: none;
+  }
+
+  #chat-watermark img {
+    width: 256px;
+    height: 256px;
+    object-fit: contain;
+   
+  }
+
+  #chat-watermark .watermark-name {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: 0.3em;
+    color: var(--text);
+    text-transform: uppercase;
+  }
+
+  #chat-watermark .watermark-sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--text);
+    text-transform: uppercase;
+  }
+
+  /* make messages sit above watermark */
+  #messages {
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ── stop button ────────────────────────────────────────── */
+  #stop-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1px solid var(--danger);
+    background: transparent;
+    color: var(--danger);
+    font-size: 14px;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  #stop-btn:hover {
+    background: rgba(255,68,68,0.15);
+  }
+  #stop-btn.visible {
+    display: flex;
+  }
+
+  /* ── wake word indicator ────────────────────────────────── */
+  #wake-indicator {
+    position: fixed;
+    bottom: 100px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    padding: 8px 20px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    display: none;
+    z-index: 100;
+    animation: fadeIn 0.2s ease;
+  }
+  #wake-indicator.visible { display: block; }
+
+  /* ── Turing tribute panel ───────────────────────────────── */
+  #turing-panel {
+    position: fixed;
+    top: 0; right: -380px;
+    width: 360px;
+    height: 100vh;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    z-index: 200;
+    transition: right 0.3s ease;
+    overflow-y: auto;
+    padding: 24px 20px;
+  }
+  #turing-panel.open { right: 0; }
+
+  #turing-panel h2 {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  #turing-panel .turing-dates {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: 'IBM Plex Mono', monospace;
+    margin-bottom: 20px;
+  }
+
+  .turing-fact {
+    margin-bottom: 16px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+  }
+
+  .turing-fact .fact-category {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent-dim);
+    margin-bottom: 6px;
+  }
+
+  .turing-fact .fact-text {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .turing-quote {
+    margin: 20px 0;
+    padding: 16px;
+    border-left: 2px solid var(--accent);
+    font-style: italic;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.7;
+  }
+
+  #turing-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 18px;
+    cursor: pointer;
+  }
+  #turing-close:hover { color: var(--text); }
+
+  #turing-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    transition: all 0.15s;
+  }
+  #turing-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   /* sidebar */
   #sidebar {
@@ -282,7 +461,8 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-end;
+    padding-bottom: 40px;
     color: var(--text-dim);
     gap: 8px;
   }
@@ -604,52 +784,77 @@
 <div id="main">
   <div id="chat-header">
     <span>session: <span id="session-label">—</span></span>
-    <span id="msg-count" style="color:var(--text-dim)"></span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span id="msg-count"
+            style="color:var(--text-dim)"></span>
+      <button id="turing-btn"
+              onclick="toggleTuringPanel()">
+        ∿ Alan Turing
+      </button>
+    </div>
   </div>
 
-  <div id="messages">
+  <div id="messages" style="position:relative;">
+    <!-- logo watermark -->
+    <div id="chat-watermark">
+      <img src="/static/logo.png"
+           alt="Turi"
+           onerror="this.style.display='none'">
+      <div class="watermark-name">Turi</div>
+      <div class="watermark-sub">
+        in memory of alan turing · 1912–1954
+      </div>
+    </div>
+
     <div id="empty-state">
-      <div class="icon">◈</div>
-      <p>start a new session to begin</p>
+      <div class="icon"></div>
+      <p>say "hey Turi" or start a new session</p>
     </div>
   </div>
 
   <div id="input-area">
-
-    <!-- voice controls -->
     <div id="voice-controls">
       <button id="mic-btn"
               onclick="toggleRecording()"
-              title="Hold to record voice">🎤</button>
-      <select id="voice-select" onchange="onVoiceChange(this.value)">
+              title="Click to record — say Hey Turi">🎤</button>
+      <select id="voice-select"
+              onchange="onVoiceChange(this.value)">
         <option value="orion">Orion ♂</option>
         <option value="lyra">Lyra ♀</option>
       </select>
       <span id="voice-status">ready</span>
     </div>
 
-    <!-- text input -->
     <div id="input-wrap">
       <textarea
         id="message-input"
-        placeholder="type or use mic..."
+        placeholder='type or say "Hey Turi..."'
         rows="1"
         maxlength="4000"
       ></textarea>
       <span id="char-count">0 / 4000</span>
     </div>
 
-    <!-- speak last reply button -->
+    <!-- stop button — shown during processing -->
+    <button id="stop-btn"
+            onclick="stopCurrentTask()"
+            title="Stop current task">⏹</button>
+
+    <!-- speak last reply -->
     <button id="tts-btn"
             onclick="speakLastReply()"
             title="Speak last reply">🔊</button>
 
-    <!-- send button -->
-    <button id="send-btn" onclick="sendMessage()" disabled>↑</button>
+    <!-- send -->
+    <button id="send-btn"
+            onclick="sendMessage()"
+            disabled>↑</button>
 
-    <!-- hidden audio player -->
     <audio id="audio-player" autoplay></audio>
   </div>
+
+  <!-- wake word indicator -->
+  <div id="wake-indicator">◈ Turi is listening...</div>
 
 <script>
   let currentSession  = null;
@@ -918,9 +1123,8 @@
 
   // ── chat — streaming ───────────────────────────────────────
 
-  async function sendMessage() {
+ async function sendMessage() {
     if (!currentSession || isWaiting) return;
-
     const input = document.getElementById('message-input');
     const text  = input.value.trim();
     if (!text) return;
@@ -928,10 +1132,9 @@
     input.value = '';
     autoResize(input);
     updateCharCount('');
-
     appendMessage('user', text);
-    isWaiting = true;
-    document.getElementById('send-btn').disabled = true;
+
+    setWaiting(true);   // ← replaces manual disable
 
     const bubble = createStreamingBubble();
     let   toolResult = null;
@@ -946,10 +1149,7 @@
         })
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(`HTTP ${res.status}: ${errText}`);
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
       const reader  = res.body.getReader();
       const decoder = new TextDecoder();
@@ -961,47 +1161,43 @@
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop(); // keep incomplete line
+        buffer = lines.pop();
 
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
             const event = JSON.parse(line.slice(6));
 
+            if (event.stopped) {
+              finalizeStreamingBubble(bubble, null);
+              break;
+            }
             if (event.chunk !== undefined) {
               appendChunk(bubble, event.chunk);
             }
-
             if (event.tool_result !== undefined) {
               toolResult = event.tool_result;
             }
-
             if (event.done) {
               lastReplyText = event.full || '';
               finalizeStreamingBubble(bubble, toolResult);
             }
-
             if (event.error) {
               appendChunk(bubble, `\n⚠ ${event.error}`);
               finalizeStreamingBubble(bubble, null);
             }
-
-          } catch(parseErr) {
-            // ignore malformed SSE lines
-          }
+          } catch(e) { /* ignore */ }
         }
       }
 
     } catch(err) {
-      console.error('[CHAT] stream error:', err);
-      // clear streaming bubble and show error
+      console.error('[CHAT]', err);
       bubble.textContent = '⚠ ' + err.message;
       finalizeStreamingBubble(bubble, null);
       showNotification(err.message, 'error', 4000);
     }
 
-    isWaiting = false;
-    document.getElementById('send-btn').disabled = false;
+    setWaiting(false);  // ← replaces manual enable
     document.getElementById('message-input').focus();
   }
 
@@ -1443,6 +1639,188 @@
     }
   }
 
+// ── stop current task ──────────────────────────────────────
+
+  async function stopCurrentTask() {
+    if (!currentSession) return;
+    try {
+      await fetch(`/stop/${currentSession}`, {
+        method: 'POST'
+      });
+      hideTyping();
+      showNotification('Task stopped', 'info', 2000);
+      setWaiting(false);
+    } catch(e) {
+      console.error('[STOP]', e);
+    }
+  }
+
+  function setWaiting(state) {
+    isWaiting = state;
+    const sendBtn = document.getElementById('send-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    if (sendBtn) sendBtn.disabled = state;
+    if (stopBtn) stopBtn.classList.toggle('visible', state);
+  }
+
+
+  // ── wake word system ───────────────────────────────────────
+
+  let wakeListening   = false;
+  let wakeStream      = null;
+  let wakeRecorder    = null;
+  let wakeChunks      = [];
+  let wakeCheckTimer  = null;
+
+  async function startWakeWordListening() {
+    // continuous background mic monitoring
+    try {
+      wakeStream = await navigator.mediaDevices.getUserMedia(
+        { audio: true }
+      );
+      listenForWakeWord();
+    } catch(e) {
+      console.warn('[WAKE] mic access denied:', e);
+    }
+  }
+
+  function listenForWakeWord() {
+    if (!wakeStream) return;
+
+    wakeChunks  = [];
+    wakeRecorder = new MediaRecorder(wakeStream, {
+      mimeType: 'audio/webm;codecs=opus'
+    });
+
+    wakeRecorder.ondataavailable = e => {
+      if (e.data.size > 0) wakeChunks.push(e.data);
+    };
+
+    wakeRecorder.onstop = async () => {
+      await checkForWakeWord();
+    };
+
+    // record 2.5 second chunks continuously
+    wakeRecorder.start();
+    wakeCheckTimer = setTimeout(() => {
+      if (wakeRecorder &&
+          wakeRecorder.state === "recording") {
+        wakeRecorder.stop();
+      }
+    }, 2500);
+  }
+
+  async function checkForWakeWord() {
+    if (isRecording || isWaiting || !currentSession) {
+      // don't check if already in active recording
+      setTimeout(listenForWakeWord, 500);
+      return;
+    }
+
+    const blob = new Blob(wakeChunks,
+                          { type: 'audio/webm' });
+    if (blob.size < 1000) {
+      // too small — silence
+      setTimeout(listenForWakeWord, 100);
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append('audio', blob, 'wake.webm');
+
+    try {
+      const res  = await fetch('/voice/wake', {
+        method: 'POST', body: fd
+      });
+      const data = await res.json();
+
+      if (data.wake_detected) {
+        console.log('[WAKE] detected:', data.heard);
+        onWakeWordDetected(data.heard);
+      }
+    } catch(e) {
+      // silently ignore wake check errors
+    }
+
+    // continue listening
+    setTimeout(listenForWakeWord, 100);
+  }
+
+  function onWakeWordDetected(heard) {
+    const indicator = document.getElementById(
+      'wake-indicator'
+    );
+    if (indicator) {
+      indicator.classList.add('visible');
+      setTimeout(() => {
+        indicator.classList.remove('visible');
+      }, 3000);
+    }
+
+    // extract command after wake word
+    const command = heard
+      .replace(/\b(hey\s+)?turi[,.]?\s*/gi, '')
+      .trim();
+
+    if (command.length > 3) {
+      // auto-fill and send command
+      const input = document.getElementById(
+        'message-input'
+      );
+      if (input && !isWaiting) {
+        input.value = command;
+        updateCharCount(command);
+        sendMessage();
+      }
+    } else {
+      // just wake word — start recording
+      if (!isRecording) {
+        setTimeout(startRecording, 300);
+      }
+    }
+
+    showNotification('Hey Turi! 👂', 'info', 2000);
+  }
+
+
+  // ── Turing tribute panel ───────────────────────────────────
+
+  function toggleTuringPanel() {
+    const panel = document.getElementById('turing-panel');
+    if (!panel) return;
+    const isOpen = panel.classList.contains('open');
+    panel.classList.toggle('open');
+
+    if (!isOpen) {
+      loadTuringFacts();
+    }
+  }
+
+  async function loadTuringFacts() {
+    const container = document.getElementById(
+      'turing-facts-container'
+    );
+    if (!container || container.children.length > 0) return;
+
+    try {
+      const res  = await fetch('/turing/facts');
+      const data = await res.json();
+
+      for (const item of data.facts) {
+        const div      = document.createElement('div');
+        div.className  = 'turing-fact';
+        div.innerHTML  = `
+          <div class="fact-category">
+            ${item.category}
+          </div>
+          <div class="fact-text">${item.fact}</div>
+        `;
+        container.appendChild(div);
+      }
+    } catch(e) {
+      console.error('[TURING]', e);
+    }
+  }
 
   // ── init ───────────────────────────────────────────────────
 
@@ -1476,7 +1854,48 @@
   setInterval(checkHealth, 15000);
   loadSessions();
   loadVoices();
+
+  // start wake word listening after a short delay
+  setTimeout(() => {
+    startWakeWordListening();
+    console.log('[WAKE] background listener started');
+  }, 2000);
 </script>
 <div id="notification-container"></div>
+<!-- Alan Turing tribute panel -->
+  <div id="turing-panel">
+    <button id="turing-close"
+            onclick="toggleTuringPanel()">×</button>
+     <img src="/static/alan.jpg" alt="Alan Turing"
+     style="width:112px;height:112px;
+            border-radius:75%;
+            display:block;
+            margin:0 auto 14px auto;
+            filter:grayscale(100%);
+            box-shadow:0 2px 10px rgba(0,0,0,0.25);">
+
+      <h2 style="text-align:center;margin-bottom:4px;">
+        Alan Mathison Turing
+      </h2>
+    <div class="turing-dates" style="text-align: center;">23 June 1912 – 7 June 1954 </div>
+
+    <div class="turing-quote">
+      "We can only see a short distance ahead,
+      but we can see plenty there that needs to be done."
+    </div>
+
+    <div id="turing-facts-container">
+      <!-- loaded from /turing/facts endpoint -->
+    </div>
+
+    <div class="turing-quote" style="margin-top:20px;
+         border-left-color:var(--text-dim);font-size:11px;">
+      Turi is named in his honor. Every line of code in this
+      system stands on the theoretical foundation he built.
+      He deserved better from the world he helped save.
+    </div>
+  </div>
+
+  <div id="notification-container"></div>
 </body>
 </html>
