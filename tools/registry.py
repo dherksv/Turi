@@ -13,6 +13,108 @@ from tools.reminder import build_reminder_intent
 
 load_dotenv()
 
+from mcp import call as mcp_call
+
+async def amazon_search(intent: dict) -> dict:
+    """Extract price filter from intent and call Amazon MCP."""
+    import re
+    text = intent["text"]
+
+    # extract price mentions like "under 2000" or "below 5000"
+    price_match = re.search(
+        r'(under|below|less than|within|upto|up to)\s*'
+        r'(?:rs\.?|inr|₹)?\s*(\d+[\d,]*)',
+        text, re.IGNORECASE
+    )
+    max_price = None
+    if price_match:
+        max_price = int(price_match.group(2).replace(",", ""))
+
+    # clean query
+    query = re.sub(
+        r'(buy|shop for|find|search for|show me|get me|order|'
+        r'under|below|less than|upto|up to|within|'
+        r'rs\.?|inr|₹|\d+)',
+        '', text, flags=re.IGNORECASE
+    ).strip()
+
+    return await mcp_call("amazon", "search_products", {
+        "query":       query or text,
+        "max_price":   max_price,
+        "min_rating":  3.5,
+        "max_results": 5
+    })
+
+
+async def youtube_search(intent: dict) -> dict:
+    """Determine if music or video and call YouTube MCP."""
+    text  = intent["text"]
+    lower = text.lower()
+
+    media_type = "music" if any(
+        w in lower for w in
+        ["music", "song", "listen", "lofi", "playlist",
+         "audio", "track", "album"]
+    ) else "video"
+
+    import re
+    query = re.sub(
+        r'^(play|watch|stream|listen to|find|search for|'
+        r'show me|put on|queue)\s+',
+        '', text, flags=re.IGNORECASE
+    ).strip()
+
+    result = await mcp_call("youtube", "search_videos", {
+        "query":       query,
+        "max_results": 5,
+        "type":        media_type
+    })
+    result["media_type"] = media_type
+    return result
+
+
+async def file_search(intent: dict) -> dict:
+    """Extract filename/type and search filesystem."""
+    import re
+    text = intent["text"]
+
+    # extract filetype if mentioned
+    type_match = re.search(
+        r'\b(pdf|docx|doc|xlsx|xls|mp4|mkv|txt|csv|py)\b',
+        text, re.IGNORECASE
+    )
+    filetype = type_match.group(1).lower() if type_match else ""
+
+    # clean query
+    query = re.sub(
+        r'^(open|find|search for|show|locate|where is)\s+',
+        '', text, flags=re.IGNORECASE
+    ).strip()
+    query = re.sub(r'\b(file|document|folder|my)\b', '',
+                   query, flags=re.IGNORECASE).strip()
+
+    return await mcp_call("filesystem", "search_files", {
+        "query":    query or text,
+        "filetype": filetype
+    })
+
+
+async def open_file(intent: dict) -> dict:
+    """Search then open best match."""
+    search = await file_search(intent)
+    files  = search.get("files", [])
+    if not files:
+        return {
+            "status":  "not_found",
+            "message": f"No files found for: {intent['text']}"
+        }
+    # open the most recently modified match
+    best = files[0]
+    result = await mcp_call("filesystem", "open_file", {
+        "path": best["path"]
+    })
+    result["found_file"] = best
+    return result
 
 async def set_reminder(intent: dict) -> dict:
     """Parse reminder details — actual saving happens after user confirms."""
@@ -115,6 +217,7 @@ async def open_app(intent: dict) -> dict:
     }
 
 
+
 # ── tool dispatch map ─────────────────────────────────────────
 
 TOOL_MAP = {
@@ -126,6 +229,10 @@ TOOL_MAP = {
     "create_event":  create_event,
     "show_info":     show_info,
     "open_app":      open_app,
+    "amazon_search": amazon_search,
+    "youtube_search": youtube_search,
+    "file_search":   file_search,
+    "open_file":     open_file,
 }
 
 

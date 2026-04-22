@@ -42,6 +42,26 @@ COMMAND_VERBS = {
     "show":      "show_info",
     "list":      "show_info",
     "read":      "show_info",
+    # shopping
+    "buy":       "amazon_search",
+    "shop":      "amazon_search",
+    "order":     "amazon_search",
+    "purchase":  "amazon_search",
+    "price":     "amazon_search",
+
+    # youtube
+    "watch":     "youtube_search",
+    "stream":    "youtube_search",
+    "video":     "youtube_search",
+    "music":     "youtube_search",
+    "song":      "youtube_search",
+    "listen":    "youtube_search",
+
+    # files
+    "open":      "open_file",
+    "file":      "file_search",
+    "document":  "file_search",
+    "folder":    "file_search",
 }
 
 CHITCHAT_PATTERNS = [

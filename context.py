@@ -23,7 +23,6 @@ def load_profile() -> dict:
     try:
         return json.loads(content)
     except json.JSONDecodeError:
-        print(f"Warning: user_profile.json is not valid JSON — using empty profile")
         return {}
 
 
@@ -58,34 +57,59 @@ def get_memory_context(user_message: str) -> str:
     return "\n".join(lines)
 
 
-def build_system_prompt(user_message: str) -> str:
+def get_capability_context(input_mode: str = "text") -> str:
+    """
+    Tell the LLM exactly what it is and what it can do.
+    Changes tone based on whether input came from voice or text.
+    """
+    base = """You are a personal AI assistant with the following capabilities:
+- Text chat: read and reply to typed messages
+- Voice input: you can hear the user speak via microphone (Whisper STT)
+- Voice output: you can speak replies aloud via Piper TTS
+  - Male voice: Orion — deep, calm, focused
+  - Female voice: Lyra — clear, warm, expressive
+- Web search: find real-time information from the internet
+- Reminders: set and manage timed reminders
+- Memory: remember facts about the user across sessions"""
+
+    if input_mode == "voice":
+        base += """
+
+The user is currently speaking to you via voice.
+Your reply will be spoken aloud by your voice system.
+Keep replies concise and conversational — avoid bullet points,
+markdown, long lists, or any formatting that sounds unnatural
+when spoken. Speak naturally as if in conversation."""
+    else:
+        base += """
+
+The user is currently typing to them.
+You may use markdown formatting in replies where helpful."""
+
+    return base
+
+
+def build_system_prompt(
+    user_message: str,
+    input_mode:   str = "text"
+) -> str:
     profile = load_profile()
 
     sections = [
-        # identity
-        "You are a personal AI assistant. "
-        "You are concise, honest, and helpful. "
-        "You never make up facts. "
-        "If unsure, say so clearly.",
-
-        # runtime
+        get_capability_context(input_mode),
         get_runtime_context(),
-
-        # user profile
         get_profile_context(profile),
-
-        # relevant past memories
         get_memory_context(user_message),
-
-        # behavioral rules
         "\n".join([
             "Rules:",
             "- Address the user by name when natural.",
-            "- Keep responses focused and avoid unnecessary padding.",
-            "- If the user references something from earlier, use the conversation history.",
-            "- Timezone-aware: use the user's local time for anything time-related.",
+            "- Never say you cannot speak — you have a voice system.",
+            "- Never say you are text-only — you are multimodal.",
+            "- For voice replies: be brief, natural, conversational.",
+            "- For text replies: be clear and well-formatted.",
+            "- Never make up facts. If unsure say so.",
+            "- Timezone-aware: use the user's local time.",
         ])
     ]
 
-    # filter empty sections and join
     return "\n\n".join(s for s in sections if s.strip())

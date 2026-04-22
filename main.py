@@ -9,6 +9,10 @@ from fastapi import UploadFile, File, Form
 from fastapi.responses import Response
 from voice.stt import transcribe
 from voice.tts import synthesize, list_voices
+from fastapi.responses import StreamingResponse
+from llm import chat, stream_chat, health_check
+from mcp import init_mcp
+from mcp import call as mcp_call, list_servers as mcp_list
 
 from memory import (
     init_db, save_message, get_history,
@@ -46,6 +50,7 @@ class SummaryRequest(BaseModel):
 @app.on_event("startup")
 async def startup():
     init_db()
+    init_mcp()          
     store_user_fact("User prefers concise responses")
     store_user_fact("User is building a multi-agent AI assistant")
     store_user_fact("User is based in Thiruvananthapuram Kerala India")
@@ -131,6 +136,7 @@ async def chat_endpoint(req: ChatRequest):
     return {
         "session_id": req.session_id,
         "reply":      reply,
+        "tool_result": result.get("tool_result"),
         "debug": {
             "intent_type":  result.get("intent_type"),
             "tool":         result.get("tool"),
@@ -282,8 +288,216 @@ async def voice_chat(
         "debug":       result.get("debug", {})
     }
 
+# ── streaming text endpoint ───────────────────────────────────
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    Streaming chat — routes through full pipeline then streams LLM reply.
+    For tool calls: executes tool first, then streams the formatted reply.
+    """
+    if not req.message.strip():
+        raise HTTPException(400, "empty message")
+
+    import json as _json
+
+    async def generate():
+        try:
+            normalized  = normalize(req.message)
+            intent      = classify(normalized)
+
+            print(f"\n[STREAM] '{req.message}'")
+            print(f"[STREAM] → {intent['intent_type']} | "
+                  f"tool={intent['tool']}")
+
+            # for tool commands — execute tool first
+            # then stream the LLM formatting
+            tool_result = None
+
+            if (intent["intent_type"] == "command"
+                    and intent["tool"]
+                    and intent["confidence"] >= 0.70):
+
+                from tools.registry import dispatch
+                tool_result = await dispatch(
+                    intent["tool"], intent
+                )
+
+                # send tool result to frontend for card rendering
+                yield (f"data: {_json.dumps({'tool_result': tool_result})}"
+                       f"\n\n")
+
+            # now stream the LLM reply
+            history = get_history(req.session_id, limit=10)
+            history.append({"role": "user", "content": req.message})
+
+            full_reply = []
+
+            # build context based on tool result
+            if tool_result and tool_result.get("status") != "stub":
+                # inject tool context into history
+                context = (
+                    f"Tool '{intent['tool']}' result: "
+                    f"{_json.dumps(tool_result)[:2000]}\n"
+                    f"Based on this, reply naturally to: "
+                    f"'{req.message}'"
+                )
+                history.append({
+                    "role":    "system",
+                    "content": context
+                })
+
+            async for chunk in stream_chat(
+                messages     = history,
+                user_message = req.message,
+                input_mode   = "text"
+            ):
+                full_reply.append(chunk)
+                yield f"data: {_json.dumps({'chunk': chunk})}\n\n"
+
+            complete = "".join(full_reply)
+
+            # save to memory
+            save_message(req.session_id, "user",      req.message)
+            save_message(req.session_id, "assistant", complete)
+
+            yield (f"data: {_json.dumps({'done': True, 'full': complete})}"
+                   f"\n\n")
+
+        except Exception as e:
+            print(f"[STREAM] error: {e}")
+            import traceback
+            traceback.print_exc()
+            yield (f"data: {_json.dumps({'error': str(e)})}"
+                   f"\n\n")
+
+    return StreamingResponse(
+        generate(),
+        media_type = "text/event-stream",
+        headers    = {
+            "Cache-Control":     "no-cache",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+# ── streaming voice endpoint ──────────────────────────────────
+
+@app.post("/voice/stream")
+async def voice_stream(
+    session_id:  str        = Form(...),
+    audio:       UploadFile = File(...),
+    voice:       str        = Form(default="orion"),
+):
+    """
+    Voice streaming pipeline:
+    audio → STT → LLM stream → TTS sentence by sentence → audio chunks back
+
+    Returns SSE with:
+    - text chunks as LLM generates
+    - audio chunks (base64 WAV) as each sentence completes
+    """
+    from voice.stt import transcribe
+    from voice.tts import synthesize
+    import json, base64, re
+
+    # 1. transcribe audio
+    audio_bytes = await audio.read()
+    stt_result  = transcribe(audio_bytes, extension="webm")
+
+    if not stt_result["success"] or not stt_result["text"]:
+        async def err():
+            yield f"data: {json.dumps({'error': 'no speech detected'})}\n\n"
+        return StreamingResponse(err(), media_type="text/event-stream")
+
+    user_text = stt_result["text"]
+    print(f"[VOICE STREAM] heard: '{user_text}'")
+
+    history = get_history(session_id, limit=10)
+    history.append({"role": "user", "content": user_text})
+
+    async def generate():
+        import json, base64
+
+        # send transcription immediately so UI can show it
+        yield f"data: {json.dumps({'heard': user_text})}\n\n"
+
+        full_reply    = []
+        sentence_buf  = ""
+        # sentence boundary — speak when we hit . ! ? or long pause
+        sentence_end  = re.compile(r'[.!?]')
+
+        async for chunk in stream_chat(
+            messages     = history,
+            user_message = user_text,
+            input_mode   = "voice"
+        ):
+            full_reply.append(chunk)
+            sentence_buf += chunk
+
+            # send text chunk to UI immediately
+            yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+
+            # check if we have a complete sentence
+            if sentence_end.search(chunk) and len(sentence_buf.strip()) > 10:
+                sentence = sentence_buf.strip()
+                sentence_buf = ""
+
+                # synthesize this sentence
+                audio_bytes_out = synthesize(sentence, voice_name=voice)
+                if audio_bytes_out:
+                    audio_b64 = base64.b64encode(
+                        audio_bytes_out
+                    ).decode()
+                    yield f"data: {json.dumps({'audio_chunk': audio_b64, 'sentence': sentence})}\n\n"
+
+        # speak any remaining buffer
+        if sentence_buf.strip():
+            audio_bytes_out = synthesize(
+                sentence_buf.strip(), voice_name=voice
+            )
+            if audio_bytes_out:
+                audio_b64 = base64.b64encode(audio_bytes_out).decode()
+                yield f"data: {json.dumps({'audio_chunk': audio_b64})}\n\n"
+
+        complete_reply = "".join(full_reply)
+
+        # save to memory
+        save_message(session_id, "user",      user_text)
+        save_message(session_id, "assistant", complete_reply)
+
+        # done
+        yield f"data: {json.dumps({'done': True, 'full': complete_reply})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type = "text/event-stream",
+        headers    = {"Cache-Control": "no-cache",
+                      "X-Accel-Buffering": "no"}
+    )
 
 @app.get("/voice/voices")
 async def get_voices():
     """List available voices and their download status."""
     return {"voices": list_voices()}
+
+# ── MCP endpoints ──────────────────────────────────
+
+@app.get("/mcp/servers")
+async def get_mcp_servers():
+    """List all registered MCP servers and their tools."""
+    return {"servers": mcp_list()}
+
+@app.post("/mcp/call")
+async def call_mcp_tool(req: dict):
+    """
+    Call any MCP tool directly.
+    Body: { server, tool, args }
+    """
+    server = req.get("server")
+    tool   = req.get("tool")
+    args   = req.get("args", {})
+
+    if not server or not tool:
+        raise HTTPException(400, "server and tool required")
+
+    result = await mcp_call(server, tool, args)
+    return result
