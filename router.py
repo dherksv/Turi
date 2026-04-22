@@ -1,6 +1,13 @@
 from tools.registry import dispatch
 from llm import chat, stream_chat
 from memory import get_history, save_reminder
+import uuid
+from pipeline import (
+    validate_intent,
+    execute_with_recovery,
+    audit_action,
+    audit_log
+)
 
 CONFIDENCE_FLOOR = 0.70
 _pending_confirmations: dict = {}
@@ -9,7 +16,7 @@ _pending_confirmations: dict = {}
 async def route(
     intent:     dict,
     session_id: str,
-    input_mode: str = "text"    # ← new param
+    input_mode: str = "text"
 ) -> dict:
 
     intent_type = intent["intent_type"]
@@ -18,27 +25,135 @@ async def route(
     text        = intent["text"]
 
     print(f"\n[ROUTER] type={intent_type} | tool={tool} | "
-          f"conf={confidence} | mode={input_mode}")
+          f"conf={confidence:.2f} | mode={input_mode}")
 
-    # confirmation check
+    # ── step 1: check pending confirmations ──────────────────
     confirmation = _check_confirmation(text, session_id)
     if confirmation:
         return await _handle_confirmation(confirmation, session_id)
 
+    # ── step 2: validate intent ───────────────────────────────
+    validation = await validate_intent(
+        user_text = text,
+        intent    = intent,
+        use_llm   = (intent_type == "command"
+                     and confidence > 0.7)
+    )
+
+    print(f"[VALIDATOR] verdict={validation.verdict} "
+          f"reason={validation.reason}")
+
+    if not validation.passed:
+        audit_log(
+            event_type = "validation_rejected",
+            session_id = session_id,
+            actor      = "validator",
+            action     = tool or intent_type,
+            outcome    = validation.verdict,
+            risk_level = "medium",
+            concern    = validation.reason
+        )
+        if validation.verdict == "reject":
+            return {
+                "reply": (
+                    f"I want to make sure I understood you. "
+                    f"Could you rephrase that? "
+                    f"({validation.reason})"
+                ),
+                "intent_type": intent_type,
+                "routed_to":   "validation_rejected"
+            }
+        # fix — use corrected intent
+        if validation.fixed:
+            intent = {**intent, **validation.fixed}
+            tool   = intent.get("tool")
+
+    # ── step 3: low confidence — LLM handles it ──────────────
     if confidence < CONFIDENCE_FLOOR:
         reply = await _llm_response(intent, session_id, input_mode)
         return {"reply": reply, "intent_type": intent_type,
                 "routed_to": "llm_low_confidence",
                 "confidence": confidence}
 
+    # ── step 4: chat and questions ────────────────────────────
     if intent_type in ("chat", "question"):
         reply = await _llm_response(intent, session_id, input_mode)
+        audit_log(
+            event_type = "chat",
+            session_id = session_id,
+            actor      = "orchestrator",
+            action     = intent_type,
+            outcome    = "ok"
+        )
         return {"reply": reply, "intent_type": intent_type,
                 "routed_to": "llm", "confidence": confidence}
 
+    # ── step 5: commands — execute with recovery ──────────────
     if intent_type == "command" and tool:
-        tool_result = await dispatch(tool, intent)
+        task_id = str(uuid.uuid4())
 
+        async def execute():
+            return await dispatch(tool, intent)
+
+        recovery_result = await execute_with_recovery(
+            task_id    = task_id,
+            session_id = session_id,
+            intent     = intent,
+            execute_fn = execute,
+            max_attempts = 3
+        )
+
+        if recovery_result["status"] in ("failed", "exhausted"):
+            audit_log(
+                event_type = "tool_failed",
+                session_id = session_id,
+                actor      = "executor",
+                action     = tool,
+                outcome    = "failed",
+                risk_level = "high",
+                concern    = recovery_result.get("error", "")
+            )
+            return {
+                "reply": (
+                    f"I tried to {tool} but ran into an issue: "
+                    f"{recovery_result.get('error', 'unknown error')}. "
+                    f"Please try again or rephrase."
+                ),
+                "routed_to": "tool_failed"
+            }
+
+        tool_result = recovery_result.get("result", {})
+
+        # ── step 6: audit the action ──────────────────────────
+        audit = await audit_action(
+            session_id  = session_id,
+            user_text   = text,
+            intent      = intent,
+            tool_result = tool_result,
+            validation  = {"verdict": validation.verdict,
+                           "reason":  validation.reason}
+        )
+
+        if audit.should_block:
+            audit_log(
+                event_type = "blocked_by_audit",
+                session_id = session_id,
+                actor      = "auditor",
+                action     = tool,
+                outcome    = "blocked",
+                risk_level = "critical",
+                concern    = str(audit.concerns)
+            )
+            return {
+                "reply": (
+                    "I'm not able to complete that action — "
+                    "it was flagged by the safety audit. "
+                    f"Concerns: {', '.join(audit.concerns)}"
+                ),
+                "routed_to": "audit_blocked"
+            }
+
+        # ── step 7: format reply ──────────────────────────────
         if tool == "web_search":
             reply = await _llm_with_search(
                 intent, tool_result, session_id, input_mode
@@ -47,27 +162,35 @@ async def route(
             reply = await _handle_reminder(
                 tool_result, intent, session_id
             )
-        elif tool_result.get("status") == "stub":
-            reply = await _llm_with_stub(
-                intent, tool_result, session_id, input_mode
-            )
-
-        elif tool == "amazon_search":
+        elif tool in ("amazon_search",):
             reply = await _format_amazon(
                 tool_result, intent, session_id, input_mode
             )
-        elif tool == "youtube_search":
+        elif tool in ("youtube_search",):
             reply = await _format_youtube(
                 tool_result, intent, session_id, input_mode
             )
         elif tool in ("file_search", "open_file"):
             reply = await _format_files(
                 tool_result, intent, session_id, input_mode
-            )    
+            )
+        elif tool_result.get("status") == "stub":
+            reply = await _llm_with_stub(
+                intent, tool_result, session_id, input_mode
+            )
         else:
             reply = await _llm_with_tool_context(
                 intent, tool_result, session_id, input_mode
             )
+
+        audit_log(
+            event_type = "tool_success",
+            session_id = session_id,
+            actor      = "executor",
+            action     = tool,
+            outcome    = "ok",
+            risk_level = audit.risk_level
+        )
 
         return {
             "reply":       reply,
@@ -75,13 +198,18 @@ async def route(
             "tool":        tool,
             "tool_result": tool_result,
             "routed_to":   "tool",
-            "confidence":  confidence
+            "confidence":  confidence,
+            "audit":       {
+                "risk_level": audit.risk_level,
+                "concerns":   audit.concerns
+            }
         }
 
+    # fallback
     reply = await _llm_response(intent, session_id, input_mode)
     return {"reply": reply, "intent_type": intent_type,
-            "routed_to": "llm_fallback", "confidence": confidence}
-
+            "routed_to": "llm_fallback",
+            "confidence": confidence}
 
 # ── reminder handlers (unchanged) ────────────────────────────
 

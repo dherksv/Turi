@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from llm import chat, stream_chat, health_check
 from mcp import init_mcp
 from mcp import call as mcp_call, list_servers as mcp_list
+from pipeline import init_audit_db, generate_report, audit_log
 
 from memory import (
     init_db, save_message, get_history,
@@ -50,6 +51,7 @@ class SummaryRequest(BaseModel):
 @app.on_event("startup")
 async def startup():
     init_db()
+    init_audit_db()
     init_mcp()          
     store_user_fact("User prefers concise responses")
     store_user_fact("User is building a multi-agent AI assistant")
@@ -478,6 +480,120 @@ async def voice_stream(
 async def get_voices():
     """List available voices and their download status."""
     return {"voices": list_voices()}
+
+# ── audit endpoints ───────────────────────────────────────────
+
+@app.get("/audit/report")
+async def get_audit_report(session_id: str = None):
+    """Generate and return an audit report."""
+    report = await generate_report(session_id)
+    return {"report": report}
+
+@app.get("/audit/log")
+async def get_audit_log(
+    session_id: str = None,
+    limit:      int = 50
+):
+    """Get raw audit log entries."""
+    import sqlite3
+    from pipeline.auditor import AUDIT_DB
+    conn  = sqlite3.connect(AUDIT_DB)
+    if session_id:
+        rows = conn.execute("""
+            SELECT timestamp, event_type, actor,
+                   action, outcome, risk_level, concern
+            FROM audit_log
+            WHERE session_id=?
+            ORDER BY id DESC LIMIT ?
+        """, (session_id, limit)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT timestamp, event_type, actor,
+                   action, outcome, risk_level, concern
+            FROM audit_log
+            ORDER BY id DESC LIMIT ?
+        """, (limit,)).fetchall()
+    conn.close()
+    return {"logs": [
+        {
+            "timestamp":  r[0],
+            "event_type": r[1],
+            "actor":      r[2],
+            "action":     r[3],
+            "outcome":    r[4],
+            "risk_level": r[5],
+            "concern":    r[6]
+        }
+        for r in rows
+    ]}
+
+@app.get("/audit/concerns")
+async def get_concerns(session_id: str = None):
+    """Get all unresolved concerns."""
+    import sqlite3
+    from pipeline.auditor import AUDIT_DB
+    conn = sqlite3.connect(AUDIT_DB)
+    if session_id:
+        rows = conn.execute("""
+            SELECT id, timestamp, concern_type,
+                   description, severity
+            FROM concerns
+            WHERE session_id=? AND resolved=0
+            ORDER BY id DESC
+        """, (session_id,)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT id, timestamp, concern_type,
+                   description, severity
+            FROM concerns
+            WHERE resolved=0 ORDER BY id DESC LIMIT 50
+        """).fetchall()
+    conn.close()
+    return {"concerns": [
+        {
+            "id":           r[0],
+            "timestamp":    r[1],
+            "concern_type": r[2],
+            "description":  r[3],
+            "severity":     r[4]
+        }
+        for r in rows
+    ]}
+
+@app.get("/agents/status")
+async def agents_status():
+    """Check all agents health."""
+    from agents import (
+        chat_agent, fast_agent,
+        validator_agent, monitor_agent, auditor_agent
+    )
+    return {
+        "orchestrator": {
+            "name":   "Gemma 4 E2B",
+            "port":   8081,
+            "status": "ok" if await chat_agent.is_online() else "offline"
+        },
+        "memory_guard": {
+            "name":   "Qwen 2.5 1.5B",
+            "port":   8082,
+            "status": "ok" if await fast_agent.is_online() else "offline"
+        },
+        "validator": {
+            "name":   "Phi-4 Mini",
+            "port":   8083,
+            "status": "ok" if await validator_agent.is_online() else "offline"
+        },
+        "monitor": {
+            "name":   "Llama 3.2 1B",
+            "port":   8084,
+            "status": "ok" if await monitor_agent.is_online() else "offline"
+        },
+        "auditor": {
+            "name":   "Qwen 2.5 1.5B",
+            "port":   8082,
+            "status": "ok" if await auditor_agent.is_online() else "offline"
+        }
+    }
 
 # ── MCP endpoints ──────────────────────────────────
 
