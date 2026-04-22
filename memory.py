@@ -53,8 +53,12 @@ def get_history(session_id: str, limit: int = 10) -> list[dict]:
         (session_id, limit)
     ).fetchall()
     conn.close()
-    # reverse so oldest first
-    return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+    # reverse so oldest first, include system messages for context
+    return [
+        {"role": r[0], "content": r[1]}
+        for r in reversed(rows)
+        if r[0] in ("user", "assistant", "system")
+    ]
 
 def get_all_sessions() -> list[str]:
     conn = sqlite3.connect(DB_PATH)

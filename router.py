@@ -8,10 +8,14 @@ from pipeline import (
     audit_action,
     audit_log
 )
+from pipeline.agent_memory import task_memory_factory
 
 CONFIDENCE_FLOOR = 0.70
 _pending_confirmations: dict = {}
 
+
+import uuid
+from pipeline.agent_memory import task_memory_factory
 
 async def route(
     intent:     dict,
@@ -19,20 +23,40 @@ async def route(
     input_mode: str = "text"
 ) -> dict:
 
+    # create isolated memory for this task
+    task_id  = str(uuid.uuid4())
+    memories = task_memory_factory.create_task_memory(
+        task_id    = task_id,
+        session_id = session_id
+    )
+
+    # each agent gets its own context
+    orch_mem  = memories["orchestrator"]
+    valid_mem = memories["validator"]
+    audit_mem = memories["auditor"]
+
     intent_type = intent["intent_type"]
     confidence  = intent["confidence"]
     tool        = intent["tool"]
     text        = intent["text"]
 
-    print(f"\n[ROUTER] type={intent_type} | tool={tool} | "
-          f"conf={confidence:.2f} | mode={input_mode}")
+    print(f"\n[ROUTER] task={task_id[:8]} "
+          f"type={intent_type} tool={tool}")
 
-    # ── step 1: check pending confirmations ──────────────────
+    # ── store user request in orchestrator working memory ─────
+    orch_mem.working.set("user_text",   text)
+    orch_mem.working.set("intent",      intent)
+    orch_mem.working.set("session_id",  session_id)
+    orch_mem.working.set("started_at",  datetime.utcnow().isoformat())
+
+    # ── confirmation check ────────────────────────────────────
     confirmation = _check_confirmation(text, session_id)
     if confirmation:
-        return await _handle_confirmation(confirmation, session_id)
+        result = await _handle_confirmation(confirmation, session_id)
+        task_memory_factory.cleanup_task(task_id)
+        return result
 
-    # ── step 2: validate intent ───────────────────────────────
+    # ── validation ────────────────────────────────────────────
     validation = await validate_intent(
         user_text = text,
         intent    = intent,
@@ -40,157 +64,146 @@ async def route(
                      and confidence > 0.7)
     )
 
-    print(f"[VALIDATOR] verdict={validation.verdict} "
-          f"reason={validation.reason}")
+    # validator writes its result to scratchpad
+    await valid_mem.write_result(
+        content      = {
+            "verdict":    validation.verdict,
+            "reason":     validation.reason,
+            "confidence": validation.confidence
+        },
+        content_type = "validation_result"
+    )
 
     if not validation.passed:
-        audit_log(
-            event_type = "validation_rejected",
-            session_id = session_id,
-            actor      = "validator",
-            action     = tool or intent_type,
-            outcome    = validation.verdict,
-            risk_level = "medium",
-            concern    = validation.reason
-        )
+        task_memory_factory.cleanup_task(task_id)
         if validation.verdict == "reject":
             return {
                 "reply": (
-                    f"I want to make sure I understood you. "
                     f"Could you rephrase that? "
                     f"({validation.reason})"
                 ),
-                "intent_type": intent_type,
-                "routed_to":   "validation_rejected"
+                "routed_to": "validation_rejected"
             }
-        # fix — use corrected intent
         if validation.fixed:
             intent = {**intent, **validation.fixed}
             tool   = intent.get("tool")
 
-    # ── step 3: low confidence — LLM handles it ──────────────
-    if confidence < CONFIDENCE_FLOOR:
+    # ── low confidence / chat / question ─────────────────────
+    if (confidence < CONFIDENCE_FLOOR
+            or intent_type in ("chat", "question")):
         reply = await _llm_response(intent, session_id, input_mode)
-        return {"reply": reply, "intent_type": intent_type,
-                "routed_to": "llm_low_confidence",
-                "confidence": confidence}
+        # orchestrator stores reply in working memory
+        orch_mem.working.set("reply", reply)
+        task_memory_factory.cleanup_task(task_id)
+        return {
+            "reply":       reply,
+            "intent_type": intent_type,
+            "routed_to":   "llm",
+            "confidence":  confidence
+        }
 
-    # ── step 4: chat and questions ────────────────────────────
-    if intent_type in ("chat", "question"):
-        reply = await _llm_response(intent, session_id, input_mode)
-        audit_log(
-            event_type = "chat",
-            session_id = session_id,
-            actor      = "orchestrator",
-            action     = intent_type,
-            outcome    = "ok"
-        )
-        return {"reply": reply, "intent_type": intent_type,
-                "routed_to": "llm", "confidence": confidence}
-
-    # ── step 5: commands — execute with recovery ──────────────
+    # ── command execution ─────────────────────────────────────
     if intent_type == "command" and tool:
-        task_id = str(uuid.uuid4())
 
         async def execute():
             return await dispatch(tool, intent)
 
         recovery_result = await execute_with_recovery(
-            task_id    = task_id,
-            session_id = session_id,
-            intent     = intent,
-            execute_fn = execute,
+            task_id      = task_id,
+            session_id   = session_id,
+            intent       = intent,
+            execute_fn   = execute,
             max_attempts = 3
         )
 
         if recovery_result["status"] in ("failed", "exhausted"):
-            audit_log(
-                event_type = "tool_failed",
-                session_id = session_id,
-                actor      = "executor",
-                action     = tool,
-                outcome    = "failed",
-                risk_level = "high",
-                concern    = recovery_result.get("error", "")
-            )
+            task_memory_factory.cleanup_task(task_id)
             return {
                 "reply": (
-                    f"I tried to {tool} but ran into an issue: "
-                    f"{recovery_result.get('error', 'unknown error')}. "
-                    f"Please try again or rephrase."
+                    f"I ran into an issue with {tool}: "
+                    f"{recovery_result.get('error', 'unknown')}. "
+                    f"Please try again."
                 ),
                 "routed_to": "tool_failed"
             }
 
         tool_result = recovery_result.get("result", {})
 
-        # ── step 6: audit the action ──────────────────────────
+        # save tool context to conversation so next turn remembers
+        if tool_result.get("status") == "ok":
+            context_summary = _summarize_tool_result(
+                tool, tool_result
+            )
+            if context_summary:
+                save_message(
+                    session_id, "system",
+                    f"[Tool result: {context_summary}]"
+                )
+        # tool agent writes result to scratchpad
+
+        tool_agent_name = f"{tool}_agent"
+        if tool_agent_name in memories:
+            tool_mem = memories[tool_agent_name]
+        else:
+            tool_mem = memories["orchestrator"]
+
+        await tool_mem.write_result(
+            content      = tool_result,
+            content_type = f"{tool}_result"
+        )
+
+        # ── audit ─────────────────────────────────────────────
         audit = await audit_action(
             session_id  = session_id,
             user_text   = text,
             intent      = intent,
             tool_result = tool_result,
-            validation  = {"verdict": validation.verdict,
-                           "reason":  validation.reason}
+            validation  = {
+                "verdict": validation.verdict,
+                "reason":  validation.reason
+            }
         )
 
-        if audit.should_block:
-            audit_log(
-                event_type = "blocked_by_audit",
-                session_id = session_id,
-                actor      = "auditor",
-                action     = tool,
-                outcome    = "blocked",
-                risk_level = "critical",
-                concern    = str(audit.concerns)
+        # auditor writes concerns to scratchpad
+        if audit.concerns:
+            await audit_mem.write_result(
+                content      = {
+                    "concerns":   audit.concerns,
+                    "risk_level": audit.risk_level
+                },
+                content_type = "audit_concerns"
             )
+
+        if audit.should_block:
+            task_memory_factory.cleanup_task(task_id)
             return {
                 "reply": (
-                    "I'm not able to complete that action — "
-                    "it was flagged by the safety audit. "
+                    "That action was blocked by the safety audit. "
                     f"Concerns: {', '.join(audit.concerns)}"
                 ),
                 "routed_to": "audit_blocked"
             }
 
-        # ── step 7: format reply ──────────────────────────────
-        if tool == "web_search":
-            reply = await _llm_with_search(
-                intent, tool_result, session_id, input_mode
-            )
-        elif tool == "set_reminder":
-            reply = await _handle_reminder(
-                tool_result, intent, session_id
-            )
-        elif tool in ("amazon_search",):
-            reply = await _format_amazon(
-                tool_result, intent, session_id, input_mode
-            )
-        elif tool in ("youtube_search",):
-            reply = await _format_youtube(
-                tool_result, intent, session_id, input_mode
-            )
-        elif tool in ("file_search", "open_file"):
-            reply = await _format_files(
-                tool_result, intent, session_id, input_mode
-            )
-        elif tool_result.get("status") == "stub":
-            reply = await _llm_with_stub(
-                intent, tool_result, session_id, input_mode
-            )
-        else:
-            reply = await _llm_with_tool_context(
-                intent, tool_result, session_id, input_mode
+        # ── format reply ──────────────────────────────────────
+        reply = await _format_reply(
+            tool, tool_result, intent, session_id, input_mode
+        )
+
+        # orchestrator stores final reply in working memory
+        orch_mem.working.set("reply",       reply)
+        orch_mem.working.set("tool_result", tool_result)
+
+        # orchestrator decides if anything worth promoting
+        # to long-term memory
+        if _worth_promoting(tool, tool_result):
+            summary = f"User used {tool}: {text[:100]}"
+            await orch_mem.promote_to_long_term(
+                content      = summary,
+                content_type = "task_summary"
             )
 
-        audit_log(
-            event_type = "tool_success",
-            session_id = session_id,
-            actor      = "executor",
-            action     = tool,
-            outcome    = "ok",
-            risk_level = audit.risk_level
-        )
+        # cleanup scratchpad after task
+        task_memory_factory.cleanup_task(task_id)
 
         return {
             "reply":       reply,
@@ -205,12 +218,60 @@ async def route(
             }
         }
 
-    # fallback
     reply = await _llm_response(intent, session_id, input_mode)
-    return {"reply": reply, "intent_type": intent_type,
-            "routed_to": "llm_fallback",
-            "confidence": confidence}
+    task_memory_factory.cleanup_task(task_id)
+    return {
+        "reply":      reply,
+        "intent_type": intent_type,
+        "routed_to":  "llm_fallback"
+    }
 
+
+def _worth_promoting(tool: str, result: dict) -> bool:
+    """Decide if a tool result is worth long-term storage."""
+    if result.get("status") != "ok":
+        return False
+    # only promote meaningful interactions
+    return tool in {
+        "set_reminder", "create_event",
+        "web_search", "amazon_search"
+    }
+
+
+async def _format_reply(
+    tool:        str,
+    tool_result: dict,
+    intent:      dict,
+    session_id:  str,
+    input_mode:  str
+) -> str:
+    if tool == "web_search":
+        return await _llm_with_search(
+            intent, tool_result, session_id, input_mode
+        )
+    elif tool == "set_reminder":
+        return await _handle_reminder(
+            tool_result, intent, session_id
+        )
+    elif tool == "amazon_search":
+        return await _format_amazon(
+            tool_result, intent, session_id, input_mode
+        )
+    elif tool == "youtube_search":
+        return await _format_youtube(
+            tool_result, intent, session_id, input_mode
+        )
+    elif tool in ("file_search", "open_file"):
+        return await _format_files(
+            tool_result, intent, session_id, input_mode
+        )
+    elif tool_result.get("status") == "stub":
+        return await _llm_with_stub(
+            intent, tool_result, session_id, input_mode
+        )
+    return await _llm_with_tool_context(
+        intent, tool_result, session_id, input_mode
+    )
 # ── reminder handlers (unchanged) ────────────────────────────
 
 async def _handle_reminder(
@@ -421,46 +482,69 @@ async def _format_amazon(
 
 
 async def _format_youtube(
-    result: dict, intent: dict,
-    session_id: str, input_mode: str
+    result:     dict,
+    intent:     dict,
+    session_id: str,
+    input_mode: str
 ) -> str:
     if result.get("status") == "error":
-        return f"YouTube search failed: {result.get('error')}"
+        error = result.get("error", "unknown")
+        # give helpful error
+        if "yt-dlp" in error:
+            return ("YouTube search isn't available right now. "
+                    "Make sure yt-dlp is installed: "
+                    "`pip install yt-dlp`")
+        return f"YouTube search failed: {error}"
 
     videos = result.get("videos", [])
     if not videos:
-        return "No videos found on YouTube."
+        return (f"I searched YouTube for '{result.get('query')}' "
+                f"but found no results. Try different keywords.")
 
-    media_type = result.get("media_type", "video")
-    lines = [f"YouTube {media_type} results:\n"]
+    media_type = result.get("type", result.get("media_type", "video"))
+    lines      = [f"YouTube results for '{result.get('query')}':\n"]
+
     for i, v in enumerate(videos, 1):
-        dur = f"{v['duration']//60}:{v['duration']%60:02d}" \
-            if v.get("duration") else "N/A"
+        dur = ""
+        if v.get("duration"):
+            m   = v["duration"] // 60
+            s   = v["duration"] % 60
+            dur = f"{m}:{s:02d}"
         lines.append(
             f"{i}. {v['title']}\n"
-            f"   Channel: {v['uploader']} | "
-            f"Duration: {dur} | "
-            f"Views: {v.get('view_count',0):,}\n"
+            f"   Channel: {v.get('uploader','')}"
+            f"{' | ' + dur if dur else ''}\n"
             f"   URL: {v['url']}\n"
         )
 
-    context = "\n".join(lines)
-    history = get_history(session_id, limit=4)
+    context  = "\n".join(lines)
+    history  = get_history(session_id, limit=6)
+    voice_note = (
+        " Give a brief spoken recommendation of the top pick."
+        if input_mode == "voice" else ""
+    )
 
     messages = (
         history
-        + [{"role": "system", "content":
-            f"{context}\n\nRecommend the best option. "
-            f"Explain briefly why it's a good pick. "
-            f"Include the YouTube URL so user can click it."}]
+        + [{
+            "role":    "system",
+            "content": (
+                f"{context}\n\n"
+                f"The user asked: '{intent['text']}'\n"
+                f"You found {len(videos)} YouTube results above.\n"
+                f"Present the top 2-3 results with their URLs "
+                f"so the user can click them. "
+                f"Be enthusiastic and helpful.{voice_note}"
+            )
+        }]
         + [{"role": "user", "content": intent["text"]}]
     )
-    return await chat(
-        messages=messages,
-        user_message=intent["text"],
-        input_mode=input_mode
-    )
 
+    return await chat(
+        messages     = messages,
+        user_message = intent["text"],
+        input_mode   = input_mode
+    )
 
 async def _format_files(
     result: dict, intent: dict,
@@ -495,3 +579,35 @@ async def _format_files(
         "\nSay 'open [filename]' to open any of these."
     )
     return "\n".join(lines)
+
+def _summarize_tool_result(tool: str, result: dict) -> str:
+    """Short summary of tool result saved to conversation history."""
+    try:
+        if tool == "amazon_search":
+            products = result.get("products", [])
+            if products:
+                names = [p["title"][:40] for p in products[:3]]
+                return (f"Amazon search found {len(products)} products: "
+                        f"{', '.join(names)}")
+
+        if tool == "youtube_search":
+            videos = result.get("videos", [])
+            if videos:
+                titles = [v["title"][:40] for v in videos[:3]]
+                return (f"YouTube found {len(videos)} videos: "
+                        f"{', '.join(titles)}")
+
+        if tool in ("file_search", "open_file"):
+            files = result.get("files", [])
+            if files:
+                names = [f["name"] for f in files[:3]]
+                return f"Found files: {', '.join(names)}"
+
+        if tool == "web_search":
+            count = result.get("count", 0)
+            query = result.get("query", "")
+            return f"Web search for '{query}' returned {count} results"
+
+    except Exception:
+        pass
+    return ""

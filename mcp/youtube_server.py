@@ -1,7 +1,9 @@
-import asyncio
 import json
+import asyncio
 import subprocess
+import webbrowser
 from mcp.base import MCPServer, MCPTool
+from debug_logger import log_event, log_error
 
 
 class YouTubeMCPServer(MCPServer):
@@ -14,138 +16,183 @@ class YouTubeMCPServer(MCPServer):
         return [
             MCPTool(
                 name        = "search_videos",
-                description = "Search YouTube for videos or music",
+                description = "Search YouTube",
                 parameters  = {
-                    "query":       "string — search query",
-                    "max_results": "number — how many results (default 5)",
-                    "type":        "string — 'music' or 'video' (default 'video')"
+                    "query":       "string",
+                    "max_results": "number",
+                    "type":        "string — music or video"
                 }
             ),
             MCPTool(
-                name        = "get_stream_url",
-                description = "Get direct stream URL for a YouTube video",
-                parameters  = {
-                    "video_url": "string — full YouTube URL",
-                    "quality":   "string — 'audio' or 'video' (default 'audio')"
-                }
+                name        = "open_video",
+                description = "Open a YouTube URL in browser",
+                parameters  = {"url": "string"}
             )
         ]
 
-    async def call_tool(self, tool_name: str, args: dict) -> dict:
+    async def call_tool(
+        self, tool_name: str, args: dict
+    ) -> dict:
         if tool_name == "search_videos":
             return await self._search(args)
-        if tool_name == "get_stream_url":
-            return await self._get_stream(args)
+        if tool_name == "open_video":
+            return self._open_in_browser(args)
         return {"error": f"unknown tool: {tool_name}"}
+
+    def _open_in_browser(self, args: dict) -> dict:
+        url = args.get("url", "")
+        if not url:
+            return {"status": "error", "error": "no url"}
+        try:
+            webbrowser.open(url)
+            log_event("youtube_opened", "youtube_mcp",
+                      {"url": url})
+            return {
+                "status":  "ok",
+                "message": f"Opened in browser: {url}",
+                "url":     url
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
     async def _search(self, args: dict) -> dict:
         query       = args.get("query", "")
         max_results = int(args.get("max_results", 5))
         media_type  = args.get("type", "video")
 
-        # add music keywords if music requested
-        if media_type == "music":
-            query = f"{query} music"
+        # clean query
+        import re
+        clean_query = re.sub(
+            r'^(play|watch|stream|listen\s+to|'
+            r'put\s+(on|a|an)?|show\s+me|'
+            r'find|search\s+for)\s+',
+            '', query, flags=re.IGNORECASE
+        ).strip()
 
-        print(f"[YOUTUBE MCP] searching: '{query}'")
+        if media_type == "music":
+            search_q = f"{clean_query} music"
+        else:
+            search_q = clean_query
+
+        print(f"[YOUTUBE MCP] searching: '{search_q}'")
+        log_event("youtube_search_start", "youtube_mcp", {
+            "raw_query":   query,
+            "clean_query": search_q,
+            "type":        media_type
+        })
 
         try:
-            # yt-dlp search — no API key needed
-            cmd = [
-                "yt-dlp",
-                f"ytsearch{max_results}:{query}",
-                "--dump-json",
-                "--flat-playlist",
-                "--no-warnings",
-                "--quiet"
-            ]
+            result = await asyncio.to_thread(
+                self._search_sync, search_q, max_results
+            )
+            result["media_type"] = media_type
+            result["clean_query"] = clean_query
 
-            result = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout = asyncio.subprocess.PIPE,
-                stderr = asyncio.subprocess.PIPE
+            # auto-open best result in browser
+            if (result.get("status") == "ok"
+                    and result.get("videos")):
+                best_url = result["videos"][0]["url"]
+                webbrowser.open(best_url)
+                result["opened_url"] = best_url
+                print(f"[YOUTUBE MCP] opened: {best_url}")
+                log_event("youtube_auto_opened",
+                          "youtube_mcp",
+                          {"url": best_url})
+
+            return result
+
+        except Exception as e:
+            log_error("youtube_mcp", e, {"query": search_q})
+            return {
+                "status": "error",
+                "error":  f"{type(e).__name__}: {str(e)}",
+                "videos": []
+            }
+
+    def _search_sync(
+        self, query: str, max_results: int
+    ) -> dict:
+        print(f"[YOUTUBE SYNC] running yt-dlp for '{query}'")
+
+        cmd = [
+            "yt-dlp",
+            f"ytsearch{max_results}:{query}",
+            "--dump-json",
+            "--flat-playlist",
+            "--no-warnings",
+            "--quiet"
+        ]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output = True,
+                timeout        = 30,
+                text           = True
             )
-            stdout, stderr = await asyncio.wait_for(
-                result.communicate(), timeout=30
-            )
+
+            if result.returncode != 0 and result.stderr:
+                print(f"[YOUTUBE SYNC] yt-dlp stderr: "
+                      f"{result.stderr[:200]}")
 
             videos = []
-            for line in stdout.decode().strip().split('\n'):
+            for line in result.stdout.strip().split("\n"):
                 if not line.strip():
                     continue
                 try:
                     data = json.loads(line)
+                    vid_id = data.get("id", "")
                     videos.append({
-                        "id":          data.get("id", ""),
-                        "title":       data.get("title", "")[:100],
-                        "url":         f"https://youtube.com/watch?v={data.get('id','')}",
-                        "duration":    data.get("duration"),
-                        "view_count":  data.get("view_count", 0),
-                        "uploader":    data.get("uploader", ""),
-                        "thumbnail":   data.get("thumbnail", ""),
-                        "description": (data.get("description") or "")[:200],
+                        "id":        vid_id,
+                        "title":     data.get("title", "")[:100],
+                        "url":       (
+                            f"https://youtube.com/watch?v={vid_id}"
+                        ),
+                        "duration":  data.get("duration"),
+                        "view_count": data.get("view_count", 0),
+                        "uploader":  data.get("uploader", ""),
+                        "thumbnail": data.get("thumbnail", ""),
                     })
                 except json.JSONDecodeError:
                     continue
 
-            print(f"[YOUTUBE MCP] found {len(videos)} videos")
+            print(f"[YOUTUBE SYNC] found {len(videos)} videos")
+
+            log_event("youtube_search_done", "youtube_mcp", {
+                "query":  query,
+                "count":  len(videos),
+                "titles": [v["title"][:40]
+                           for v in videos[:3]]
+            })
+
             return {
                 "status":  "ok",
                 "query":   query,
-                "type":    media_type,
                 "count":   len(videos),
                 "videos":  videos
             }
 
-        except asyncio.TimeoutError:
-            return {"status": "error", "error": "search timed out", "videos": []}
         except FileNotFoundError:
-            return {"status": "error",
-                    "error": "yt-dlp not installed — run: pip install yt-dlp",
-                    "videos": []}
-        except Exception as e:
-            return {"status": "error", "error": str(e), "videos": []}
-
-    async def _get_stream(self, args: dict) -> dict:
-        video_url = args.get("video_url", "")
-        quality   = args.get("quality", "audio")
-
-        print(f"[YOUTUBE MCP] getting stream: {video_url} ({quality})")
-
-        try:
-            if quality == "audio":
-                fmt = "bestaudio[ext=m4a]/bestaudio/best"
-            else:
-                fmt = "best[height<=720]/best"
-
-            cmd = [
-                "yt-dlp",
-                "--get-url",
-                "--format", fmt,
-                "--no-warnings",
-                "--quiet",
-                video_url
-            ]
-
-            result = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout = asyncio.subprocess.PIPE,
-                stderr = asyncio.subprocess.PIPE
-            )
-            stdout, _ = await asyncio.wait_for(
-                result.communicate(), timeout=30
-            )
-
-            stream_url = stdout.decode().strip()
-            if not stream_url:
-                return {"status": "error", "error": "no stream URL found"}
-
+            msg = ("yt-dlp not installed. "
+                   "Run: pip install yt-dlp")
+            print(f"[YOUTUBE SYNC] {msg}")
             return {
-                "status":     "ok",
-                "stream_url": stream_url,
-                "video_url":  video_url,
-                "quality":    quality
+                "status": "error",
+                "error":  msg,
+                "videos": []
             }
-
+        except subprocess.TimeoutExpired:
+            return {
+                "status": "error",
+                "error":  "yt-dlp search timed out",
+                "videos": []
+            }
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            import traceback
+            tb = traceback.format_exc()
+            print(f"[YOUTUBE SYNC] error: {e}\n{tb}")
+            return {
+                "status": "error",
+                "error":  str(e),
+                "videos": []
+            }

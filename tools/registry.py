@@ -16,35 +16,47 @@ load_dotenv()
 from mcp import call as mcp_call
 
 async def amazon_search(intent: dict) -> dict:
-    """Extract price filter from intent and call Amazon MCP."""
     import re
     text = intent["text"]
 
-    # extract price mentions like "under 2000" or "below 5000"
+    # extract price — handles: under 5000, rs 5000,
+    # ₹5000, below 50000, upto 2000
     price_match = re.search(
-        r'(under|below|less than|within|upto|up to)\s*'
-        r'(?:rs\.?|inr|₹)?\s*(\d+[\d,]*)',
+        r'(?:under|below|less\s+than|within|'
+        r'upto|up\s+to|at|for|around)\s*'
+        r'(?:rs\.?|inr|₹)?\s*(\d[\d,]*)'
+        r'|(?:rs\.?|inr|₹)\s*(\d[\d,]*)',
         text, re.IGNORECASE
     )
+
     max_price = None
     if price_match:
-        max_price = int(price_match.group(2).replace(",", ""))
+        raw = price_match.group(1) or price_match.group(2)
+        if raw:
+            max_price = int(raw.replace(",", ""))
+            print(f"[AMAZON] extracted price: ₹{max_price}")
 
-    # clean query
+    # clean query — remove price and command words
     query = re.sub(
-        r'(buy|shop for|find|search for|show me|get me|order|'
-        r'under|below|less than|upto|up to|within|'
-        r'rs\.?|inr|₹|\d+)',
-        '', text, flags=re.IGNORECASE
-    ).strip()
+        r'(buy|shop\s+for|find|search\s+for|show\s+me|'
+        r'get\s+me|order|need|want|suggest|recommend|'
+        r'under|below|less\s+than|upto|up\s+to|within|'
+        r'at|for|around|rs\.?|inr|₹|\d[\d,]*\s*(?:rs|inr)?)',
+        ' ', text, flags=re.IGNORECASE
+    )
+    query = re.sub(r'\s+', ' ', query).strip()
+
+    if not query:
+        query = intent["text"]
+
+    print(f"[AMAZON] query='{query}' max_price={max_price}")
 
     return await mcp_call("amazon", "search_products", {
-        "query":       query or text,
+        "query":       query,
         "max_price":   max_price,
         "min_rating":  3.5,
         "max_results": 5
     })
-
 
 async def youtube_search(intent: dict) -> dict:
     """Determine if music or video and call YouTube MCP."""

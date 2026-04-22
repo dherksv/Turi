@@ -12,56 +12,58 @@ QUESTION_STARTERS = (
 
 COMMAND_VERBS = {
     # scheduling
-    "remind":    "set_reminder",
-    "schedule":  "set_reminder",
-    "set":       "set_reminder",
-    "add":       "set_reminder",
-    # search
-    "search":    "web_search",
-    "find":      "web_search",
-    "look up":   "web_search",
-    "google":    "web_search",
-    "browse":    "web_search",
-    # music
-    "play":      "play_music",
-    "pause":     "play_music",
-    "stop":      "play_music",
-    "skip":      "play_music",
-    # messaging
-    "send":      "send_message",
-    "message":   "send_message",
-    "text":      "send_message",
-    "call":      "make_call",
-    # calendar
-    "book":      "create_event",
-    "create":    "create_event",
-    "cancel":    "create_event",
-    # system
-    "open":      "open_app",
-    "launch":    "open_app",
-    "show":      "show_info",
-    "list":      "show_info",
-    "read":      "show_info",
-    # shopping
-    "buy":       "amazon_search",
-    "shop":      "amazon_search",
-    "order":     "amazon_search",
-    "purchase":  "amazon_search",
-    "price":     "amazon_search",
+    "remind":     "set_reminder",
+    "schedule":   "set_reminder",
+    "set":        "set_reminder",
+    "add":        "set_reminder",
 
-    # youtube
-    "watch":     "youtube_search",
-    "stream":    "youtube_search",
-    "video":     "youtube_search",
-    "music":     "youtube_search",
-    "song":      "youtube_search",
-    "listen":    "youtube_search",
+    # search
+    "search":     "web_search",
+    "find":       "web_search",
+    "look":       "web_search",
+    "google":     "web_search",
+    "browse":     "web_search",
+    "lookup":     "web_search",
+
+    # shopping
+    "buy":        "amazon_search",
+    "shop":       "amazon_search",
+    "order":      "amazon_search",
+    "purchase":   "amazon_search",
+    "get":        "amazon_search",
+    "need":       "amazon_search",
+    "want":       "amazon_search",
+    "suggest":    "amazon_search",
+    "recommend":  "amazon_search",
+
+    # youtube / media
+    "play":       "youtube_search",
+    "watch":      "youtube_search",
+    "stream":     "youtube_search",
+    "listen":     "youtube_search",
+    "show":       "youtube_search",
+    "put":        "youtube_search",
+    "queue":      "youtube_search",
 
     # files
-    "open":      "open_file",
-    "file":      "file_search",
-    "document":  "file_search",
-    "folder":    "file_search",
+    "open":       "open_file",
+    "launch":     "open_file",
+    "read":       "file_search",
+    "load":       "open_file",
+
+    # messaging
+    "send":       "send_message",
+    "message":    "send_message",
+    "text":       "send_message",
+    "call":       "make_call",
+
+    # calendar
+    "book":       "create_event",
+    "create":     "create_event",
+    "cancel":     "create_event",
+
+    # system
+    "list":       "show_info",
 }
 
 CHITCHAT_PATTERNS = [
@@ -87,14 +89,6 @@ TIME_PATTERNS = [
 # ── classifier ────────────────────────────────────────────────
 
 def classify(normalized: dict) -> dict:
-    """
-    Takes a normalized payload, returns it enriched with:
-      - intent_type : "command" | "question" | "chat"
-      - tool        : which tool to call (or None)
-      - confidence  : 0.0 – 1.0
-      - entities    : extracted values (time refs, etc.)
-      - raw_text    : original cleaned text
-    """
     text  = normalized["text"]
     lower = text.lower().strip()
     words = lower.split()
@@ -102,51 +96,101 @@ def classify(normalized: dict) -> dict:
 
     entities = _extract_entities(lower)
 
-    # ── chitchat — check first, short-circuits everything ────
+    # ── chitchat ──────────────────────────────────────────────
     for pattern in CHITCHAT_PATTERNS:
         if re.match(pattern, lower):
             return _result("chat", None, 0.95, entities, normalized)
 
-    # ── very short input — treat as chat ────────────────────
+    # ── very short ────────────────────────────────────────────
     if normalized["word_count"] <= 2 and not lower.endswith("?"):
         return _result("chat", None, 0.75, entities, normalized)
 
-    # ── explicit question mark ───────────────────────────────
+    # ── scan ALL words for command verbs BEFORE question check ─
+    # This catches: "can you open...", "could you play...",
+    # "I need to find...", "please search..."
+    for i, word in enumerate(words):
+        if word in COMMAND_VERBS:
+            tool = COMMAND_VERBS[word]
+            # make sure it's not a false positive
+            # (e.g. "what is the best..." — "best" not a verb)
+            conf = 0.90
+            if i > 0:
+                conf = 0.85  # slightly lower if not first word
+            if tool == "set_reminder" and entities.get("time_refs"):
+                conf = 0.95
+            return _result("command", tool, conf, entities, normalized)
+
+    # ── two-word phrases ──────────────────────────────────────
+    two_word_map = {
+        "look up":    "web_search",
+        "search for": "web_search",
+        "find me":    "amazon_search",
+        "buy me":     "amazon_search",
+        "get me":     "amazon_search",
+        "play me":    "youtube_search",
+        "show me":    "youtube_search",
+        "open file":  "open_file",
+        "open the":   "open_file",
+        "read file":  "file_search",
+        "put on":     "youtube_search",
+        "i need":     "amazon_search",
+        "i want":     "amazon_search",
+        "i am looking": "amazon_search",
+        "looking for": "amazon_search",
+    }
+    # check all consecutive word pairs, not just first two
+    for i in range(len(words) - 1):
+        pair = f"{words[i]} {words[i+1]}"
+        if pair in two_word_map:
+            return _result(
+                "command", two_word_map[pair],
+                0.88, entities, normalized
+            )
+
+    # three-word phrases
+    three_word_map = {
+        "i am looking": "amazon_search",
+        "can you open": "open_file",
+        "can you play": "youtube_search",
+        "can you find": "web_search",
+        "can you search": "web_search",
+        "can you show": "youtube_search",
+        "can you buy":  "amazon_search",
+        "can you list": "file_search",
+        "could you open": "open_file",
+        "could you play": "youtube_search",
+        "could you find": "web_search",
+        "please open":   "open_file",
+        "please find":   "web_search",
+        "please play":   "youtube_search",
+        "please search": "web_search",
+    }
+    for i in range(len(words) - 2):
+        triple = f"{words[i]} {words[i+1]} {words[i+2]}"
+        if triple in three_word_map:
+            return _result(
+                "command", three_word_map[triple],
+                0.87, entities, normalized
+            )
+
+    # ── explicit question mark ────────────────────────────────
     if text.strip().endswith("?"):
         return _result("question", None, 0.90, entities, normalized)
 
-    # ── starts with question word ────────────────────────────
+    # ── starts with question word ─────────────────────────────
     if first in QUESTION_STARTERS:
         return _result("question", None, 0.85, entities, normalized)
 
-    # ── command verb match ───────────────────────────────────
-    # check first word
-    if first in COMMAND_VERBS:
-        tool = COMMAND_VERBS[first]
-        conf = 0.90
-        # boost confidence if time entity found for scheduling tools
-        if tool == "set_reminder" and entities.get("time_refs"):
-            conf = 0.95
-        return _result("command", tool, conf, entities, normalized)
-
-    # check two-word phrases like "look up"
-    if normalized["word_count"] >= 2:
-        two_words = " ".join(words[:2])
-        if two_words in COMMAND_VERBS:
-            return _result("command", COMMAND_VERBS[two_words],
-                           0.88, entities, normalized)
-
-    # ── implicit command — has time reference + action-like ──
+    # ── implicit command with time reference ──────────────────
     if entities.get("time_refs") and normalized["word_count"] >= 3:
-        return _result("command", "set_reminder", 0.65, entities, normalized)
+        return _result("command", "set_reminder", 0.65,
+                       entities, normalized)
 
-    # ── default: treat as question if long enough ────────────
+    # ── default ───────────────────────────────────────────────
     if normalized["word_count"] >= 4:
         return _result("question", None, 0.70, entities, normalized)
 
-    # ── fallback: chat ───────────────────────────────────────
     return _result("chat", None, 0.60, entities, normalized)
-
 
 def _extract_entities(text: str) -> dict:
     entities = {}

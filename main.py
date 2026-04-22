@@ -1,3 +1,4 @@
+import sys
 import asyncio
 import json
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +16,10 @@ from mcp import init_mcp
 from mcp import call as mcp_call, list_servers as mcp_list
 from pipeline import init_audit_db, generate_report, audit_log
 
+from debug_logger import (
+    log_event, log_classification,
+    get_recent_logs, get_error_logs
+)
 from memory import (
     init_db, save_message, get_history,
     get_all_sessions, get_reminders_for_session
@@ -27,6 +32,11 @@ from router import route
 from tools.search import search_web
 from sse import sse_manager
 from scheduler import reminder_loop
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(
+        asyncio.WindowsSelectorEventLoopPolicy()
+    )
 
 app = FastAPI(title="Personal Assistant")
 app.mount("/static", StaticFiles(directory="frontend"), name="static")
@@ -293,60 +303,94 @@ async def voice_chat(
 # ── streaming text endpoint ───────────────────────────────────
 @app.post("/chat/stream")
 async def chat_stream(req: ChatRequest):
-    """
-    Streaming chat — routes through full pipeline then streams LLM reply.
-    For tool calls: executes tool first, then streams the formatted reply.
-    """
     if not req.message.strip():
         raise HTTPException(400, "empty message")
 
     import json as _json
+    import time
 
     async def generate():
+        task_start = time.time()
+        task_id    = str(uuid.uuid4())
+
         try:
-            normalized  = normalize(req.message)
-            intent      = classify(normalized)
+            normalized = normalize(req.message)
+            intent     = classify(normalized)
+
+            # log classification
+            log_classification(
+                req.message, intent, req.session_id
+            )
 
             print(f"\n[STREAM] '{req.message}'")
             print(f"[STREAM] → {intent['intent_type']} | "
-                  f"tool={intent['tool']}")
+                  f"tool={intent['tool']} | "
+                  f"conf={intent.get('confidence', 0):.2f}")
 
-            # for tool commands — execute tool first
-            # then stream the LLM formatting
+            # send classification to frontend for debug
+            yield (f"data: {_json.dumps({'debug_intent': intent})}"
+                   f"\n\n")
+
             tool_result = None
 
             if (intent["intent_type"] == "command"
                     and intent["tool"]
                     and intent["confidence"] >= 0.70):
 
+                tool_start = time.time()
+
+                log_event("tool_dispatch", "router", {
+                    "tool":    intent["tool"],
+                    "message": req.message[:100]
+                }, session_id=req.session_id, task_id=task_id)
+
                 from tools.registry import dispatch
                 tool_result = await dispatch(
                     intent["tool"], intent
                 )
 
-                # send tool result to frontend for card rendering
-                yield (f"data: {_json.dumps({'tool_result': tool_result})}"
+                tool_ms = int((time.time() - tool_start) * 1000)
+
+                from debug_logger import log_tool_call
+                log_tool_call(
+                    tool        = intent["tool"],
+                    args        = intent,
+                    result      = tool_result,
+                    agent       = "executor",
+                    session_id  = req.session_id,
+                    task_id     = task_id,
+                    duration_ms = tool_ms,
+                    error       = tool_result.get("error")
+                                  if tool_result else None
+                )
+
+                print(f"[TOOL] {intent['tool']} → "
+                      f"status={tool_result.get('status')} "
+                      f"({tool_ms}ms)")
+
+                yield (f"data: {_json.dumps({'tool_result': tool_result, 'debug_tool_ms': tool_ms})}"
                        f"\n\n")
 
-            # now stream the LLM reply
             history = get_history(req.session_id, limit=10)
-            history.append({"role": "user", "content": req.message})
+            history.append({
+                "role":    "user",
+                "content": req.message
+            })
 
-            full_reply = []
-
-            # build context based on tool result
-            if tool_result and tool_result.get("status") != "stub":
-                # inject tool context into history
+            if tool_result and tool_result.get("status") == "ok":
+                import json as j
                 context = (
-                    f"Tool '{intent['tool']}' result: "
-                    f"{_json.dumps(tool_result)[:2000]}\n"
-                    f"Based on this, reply naturally to: "
-                    f"'{req.message}'"
+                    f"Tool '{intent['tool']}' result:\n"
+                    f"{j.dumps(tool_result)[:2000]}\n\n"
+                    f"Based on this, reply to: '{req.message}'"
                 )
                 history.append({
                     "role":    "system",
                     "content": context
                 })
+
+            full_reply = []
+            llm_start  = time.time()
 
             async for chunk in stream_chat(
                 messages     = history,
@@ -354,21 +398,39 @@ async def chat_stream(req: ChatRequest):
                 input_mode   = "text"
             ):
                 full_reply.append(chunk)
-                yield f"data: {_json.dumps({'chunk': chunk})}\n\n"
+                yield (f"data: {_json.dumps({'chunk': chunk})}"
+                       f"\n\n")
 
+            llm_ms   = int((time.time() - llm_start) * 1000)
             complete = "".join(full_reply)
 
-            # save to memory
-            save_message(req.session_id, "user",      req.message)
-            save_message(req.session_id, "assistant", complete)
+            save_message(req.session_id, "user",
+                         req.message)
+            save_message(req.session_id, "assistant",
+                         complete)
 
-            yield (f"data: {_json.dumps({'done': True, 'full': complete})}"
+            total_ms = int((time.time() - task_start) * 1000)
+
+            log_event("request_complete", "orchestrator", {
+                "message":   req.message[:100],
+                "tool":      intent.get("tool"),
+                "reply_len": len(complete),
+                "llm_ms":    llm_ms,
+                "total_ms":  total_ms
+            }, session_id=req.session_id, task_id=task_id)
+
+            yield (f"data: {_json.dumps({'done': True, 'full': complete, 'debug': {'total_ms': total_ms, 'llm_ms': llm_ms, 'tool': intent.get('tool'), 'tool_status': tool_result.get('status') if tool_result else None}})}"
                    f"\n\n")
 
         except Exception as e:
-            print(f"[STREAM] error: {e}")
             import traceback
-            traceback.print_exc()
+            tb = traceback.format_exc()
+            log_event("stream_error", "router", {
+                "message": req.message[:100]
+            }, error=tb,
+               session_id=req.session_id,
+               task_id=task_id)
+            print(f"[STREAM ERROR] {e}\n{tb}")
             yield (f"data: {_json.dumps({'error': str(e)})}"
                    f"\n\n")
 
@@ -380,7 +442,73 @@ async def chat_stream(req: ChatRequest):
             "X-Accel-Buffering": "no"
         }
     )
+# ── debug endpoints ───────────────────────────────────────────
 
+@app.get("/debug/logs")
+async def debug_logs(limit: int = 50):
+    """Recent structured debug logs."""
+    return {"logs": get_recent_logs(limit)}
+
+@app.get("/debug/errors")
+async def debug_errors(limit: int = 20):
+    """Recent error logs."""
+    return {"errors": get_error_logs(limit)}
+
+@app.get("/debug/fs-roots")
+async def debug_fs_roots():
+    """Show which directories file search scans."""
+    from mcp.filesystem_server import get_search_roots
+    roots = get_search_roots()
+    return {
+        "roots": [str(r) for r in roots],
+        "exist": [str(r) for r in roots if r.exists()]
+    }
+
+@app.post("/debug/classify")
+async def debug_classify(req: ChatRequest):
+    normalized = normalize(req.message)
+    intent     = classify(normalized)
+    log_classification(req.message, intent, req.session_id)
+    return {
+        "input":       req.message,
+        "intent":      intent,
+        "explanation": (
+            f"→ {intent['intent_type']} | "
+            f"tool={intent['tool']} | "
+            f"conf={intent['confidence']}"
+        )
+    }
+
+@app.get("/debug/test-youtube")
+async def test_youtube(q: str = "funny cat"):
+    """Test YouTube search directly."""
+    from mcp import call as mcp_call
+    result = await mcp_call("youtube", "search_videos", {
+        "query":       q,
+        "max_results": 3,
+        "type":        "video"
+    })
+    return result
+
+@app.get("/debug/test-amazon")
+async def test_amazon(q: str = "headset", price: int = 5000):
+    """Test Amazon search directly."""
+    from mcp import call as mcp_call
+    result = await mcp_call("amazon", "search_products", {
+        "query":       q,
+        "max_price":   price,
+        "max_results": 3
+    })
+    return result
+
+@app.get("/debug/test-files")
+async def test_files(q: str = "report"):
+    """Test file search directly."""
+    from mcp import call as mcp_call
+    result = await mcp_call("filesystem", "search_files", {
+        "query": q
+    })
+    return result
 # ── streaming voice endpoint ──────────────────────────────────
 
 @app.post("/voice/stream")
@@ -476,6 +604,23 @@ async def voice_stream(
                       "X-Accel-Buffering": "no"}
     )
 
+# in main.py — already exists but let's make it more useful
+@app.post("/debug/classify")
+async def debug_classify(req: ChatRequest):
+    from normalizer import normalize
+    from intent import classify
+    normalized = normalize(req.message)
+    intent     = classify(normalized)
+    return {
+        "input":       req.message,
+        "normalized":  normalized,
+        "intent":      intent,
+        "explanation": (
+            f"Classified as '{intent['intent_type']}' "
+            f"with tool='{intent['tool']}' "
+            f"confidence={intent['confidence']}"
+        )
+    }
 @app.get("/voice/voices")
 async def get_voices():
     """List available voices and their download status."""
@@ -593,6 +738,43 @@ async def agents_status():
             "port":   8082,
             "status": "ok" if await auditor_agent.is_online() else "offline"
         }
+    }
+# ── Memory management endpoints ──────────────────────────────────
+
+@app.get("/memory/status")
+async def memory_status(session_id: str = ""):
+    """Show memory layer activity — who wrote what."""
+    conn = sqlite3.connect("data/assistant.db")
+
+    scratchpad_recent = conn.execute("""
+        SELECT agent_name, result_type, written_at
+        FROM task_scratchpad
+        ORDER BY id DESC LIMIT 20
+    """).fetchall()
+
+    conn.close()
+
+    # gateway write log from pipeline
+    from pipeline.agent_memory import task_memory_factory
+
+    return {
+        "scratchpad_recent": [
+            {
+                "agent":       r[0],
+                "result_type": r[1],
+                "written_at":  r[2]
+            }
+            for r in scratchpad_recent
+        ],
+        "memory_layers": {
+            "tier_1_working":   "private per agent — not visible",
+            "tier_2_scratchpad":"SQLite task_scratchpad table",
+            "tier_3_long_term": "ChromaDB + user_profile.json"
+        },
+        "write_rule": (
+            "ALL writes to tier 2/3 go through "
+            "Memory Guard (Qwen 1.5B) first"
+        )
     }
 
 # ── MCP endpoints ──────────────────────────────────
