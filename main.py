@@ -1,13 +1,14 @@
 import sys
 import asyncio
 import json
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import uuid
 from fastapi import UploadFile, File, Form
 from fastapi.responses import Response
+import os
 from voice.stt import transcribe
 from voice.tts import synthesize, list_voices
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,14 @@ from mcp import init_mcp
 from mcp import call as mcp_call, list_servers as mcp_list
 from pipeline import init_audit_db, generate_report, audit_log
 from typing import Optional
+
+from telegram_bot.bot import (
+    handle_update,
+    set_webhook,
+    delete_webhook,
+    polling_loop,
+    send_message as tg_send
+)
 
 from debug_logger import (
     log_event, log_classification,
@@ -69,6 +78,13 @@ async def startup():
     store_user_fact("User is based in Thiruvananthapuram Kerala India")
     # pass sse_manager to scheduler
     asyncio.create_task(reminder_loop(sse_manager))
+ # start Telegram polling if token is set
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if token and token != "your_bot_token_here":
+        print("[TELEGRAM] starting polling mode...")
+        asyncio.create_task(polling_loop())
+    else:
+        print("[TELEGRAM] no bot token — skipping")
 
 
 @app.get("/")
@@ -891,6 +907,67 @@ async def memory_status(session_id: str = ""):
         )
     }
 
+# ── Telegram endpoints ────────────────────────────────────────
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    x_telegram_bot_api_secret_token: str = Header(
+        None, alias="X-Telegram-Bot-Api-Secret-Token"
+    )
+):
+    """Receive updates from Telegram via webhook."""
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    if secret and x_telegram_bot_api_secret_token != secret:
+        raise HTTPException(403, "invalid secret")
+
+    update = await request.json()
+    asyncio.create_task(handle_update(update))
+    return {"ok": True}
+
+
+@app.post("/telegram/set-webhook")
+async def setup_telegram_webhook(url: str):
+    """
+    Register your public URL as Telegram webhook.
+    Use ngrok or similar for local development.
+    Example: https://your-ngrok-url.ngrok.io/telegram/webhook
+    """
+    result = await set_webhook(url)
+    return result
+
+
+@app.post("/telegram/delete-webhook")
+async def remove_telegram_webhook():
+    """Switch from webhook to polling mode."""
+    result = await delete_webhook()
+    return result
+
+
+@app.get("/telegram/status")
+async def telegram_status():
+    """Check bot connection status."""
+    import httpx
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        return {"status": "no token configured"}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            f"https://api.telegram.org/bot{token}/getMe"
+        )
+        data = resp.json()
+
+    return {
+        "status":   "connected" if data.get("ok") else "error",
+        "bot_name": data.get("result", {}).get(
+            "first_name", ""
+        ),
+        "username": data.get("result", {}).get(
+            "username", ""
+        ),
+        "mode":     "polling"
+    }
 # ── MCP endpoints ──────────────────────────────────
 
 @app.get("/mcp/servers")
