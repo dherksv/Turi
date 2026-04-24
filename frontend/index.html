@@ -1222,35 +1222,49 @@
   }
 
   async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia(
-        { audio: true }
-      );
-      audioChunks   = [];
-      mediaRecorder = new MediaRecorder(stream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-      mediaRecorder.ondataavailable = e => {
-        if (e.data.size > 0) audioChunks.push(e.data);
-      };
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        await processRecording();
-      };
-      mediaRecorder.start(100);
-      isRecording = true;
+    // return a promise that resolves when recording starts
+    return new Promise(async (resolve, reject) => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(
+          { audio: true }
+        );
 
-      const btn   = document.getElementById('mic-btn');
-      btn.className   = 'recording';
-      btn.textContent = '⏹';
-      document.getElementById('voice-status').textContent = 'recording...';
+        audioChunks   = [];
+        mediaRecorder = new MediaRecorder(stream, {
+          mimeType: 'audio/webm;codecs=opus'
+        });
 
-    } catch(err) {
-      console.error('[MIC]', err);
-      showNotification(
-        'Microphone access denied', 'error', 4000
-      );
-    }
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          await processRecording();
+        };
+
+        mediaRecorder.start(100);
+        isRecording = true;
+
+        const btn = document.getElementById('mic-btn');
+        if (btn) {
+          btn.className   = 'recording';
+          btn.textContent = '⏹';
+        }
+        const st = document.getElementById('voice-status');
+        if (st) st.textContent = 'recording...';
+
+        resolve(); // recording started successfully
+
+      } catch(err) {
+        console.error('[MIC] error:', err);
+        showNotification(
+          'Microphone access denied. Allow mic access.',
+          'error', 4000
+        );
+        reject(err);
+      }
+    });
   }
 
   function stopRecording() {
@@ -1454,16 +1468,28 @@
     sseSource.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data);
-        if (ev.type === 'reminder') {
+        console.log('[SSE] event received:', ev);
+
+        if (ev.type === 'wake_word') {
+          console.log('[WAKE] wake word event received!', ev.data);
+          handleWakeWordEvent(ev.data);
+
+        } else if (ev.type === 'reminder') {
           showNotification(ev.data.task, 'reminder', 8000);
           appendMessage('assistant', `⏰ Reminder: ${ev.data.task}`);
+
         } else if (ev.type === 'notification') {
-          showNotification(
-            ev.data.message, ev.data.level || 'info'
-          );
+          showNotification(ev.data.message, ev.data.level || 'info');
+
+        } else if (ev.type === 'ping') {
+          // keepalive — ignore
+
+        } else if (ev.type === 'connected') {
+          console.log('[SSE] session confirmed');
         }
+
       } catch(err) {
-        console.error('[SSE]', err);
+        console.error('[SSE] parse error:', err);
       }
     };
     sseSource.onerror = () => {
@@ -1607,6 +1633,78 @@
     if (el) el.textContent = `${val.length} / 4000`;
   }
 
+// ── wake word handler ──────────────────────────────────────
+
+  async function handleWakeWordEvent(data) {
+    const prob = data.prob || 0;
+    console.log(`[WAKE] handling detection prob=${prob}`);
+
+    // show wake indicator
+    const indicator = document.getElementById('wake-indicator');
+    if (indicator) {
+      indicator.textContent = `◈ Hey Turi! (${(prob*100).toFixed(0)}% confidence)`;
+      indicator.classList.add('visible');
+      setTimeout(() => indicator.classList.remove('visible'), 4000);
+    }
+
+    showNotification(`Hey Turi! 👂 Listening...`, 'info', 3000);
+
+    // don't start recording if already busy
+    if (isRecording || isWaiting) {
+      console.log('[WAKE] already recording or waiting — skipping mic start');
+      return;
+    }
+
+    // need an active session
+    if (!currentSession) {
+      showNotification(
+        'Start a session first to use wake word',
+        'warning', 3000
+      );
+      return;
+    }
+
+    // request mic permission if not already granted
+    try {
+      const perm = await navigator.permissions.query(
+        { name: 'microphone' }
+      );
+      if (perm.state === 'denied') {
+        showNotification(
+          'Microphone access denied — allow mic in browser settings',
+          'error', 5000
+        );
+        return;
+      }
+    } catch(e) {
+      // permissions API not supported — try anyway
+    }
+
+    // small delay so user knows Turi is listening
+    await new Promise(r => setTimeout(r, 300));
+
+    // start recording — this activates Whisper pipeline
+    try {
+      await startRecording();
+      console.log('[WAKE] recording started after wake word');
+
+      // auto stop after 5 seconds of silence
+      // user can also click stop manually
+      setTimeout(() => {
+        if (isRecording) {
+          console.log('[WAKE] auto-stopping after 5s');
+          stopRecording();
+        }
+      }, 5000);
+
+    } catch(err) {
+      console.error('[WAKE] failed to start recording:', err);
+      showNotification(
+        'Could not start microphone: ' + err.message,
+        'error', 4000
+      );
+    }
+  }
 
   // ── health ─────────────────────────────────────────────────
 
@@ -1672,114 +1770,25 @@
   let wakeChunks      = [];
   let wakeCheckTimer  = null;
 
-  async function startWakeWordListening() {
-    // continuous background mic monitoring
-    try {
-      wakeStream = await navigator.mediaDevices.getUserMedia(
-        { audio: true }
-      );
-      listenForWakeWord();
-    } catch(e) {
-      console.warn('[WAKE] mic access denied:', e);
-    }
-  }
+  
 
-  function listenForWakeWord() {
-    if (!wakeStream) return;
+  function onWakeWordDetected(score) {
+    console.log(`[WAKE] detected with score ${score}`);
 
-    wakeChunks  = [];
-    wakeRecorder = new MediaRecorder(wakeStream, {
-      mimeType: 'audio/webm;codecs=opus'
-    });
-
-    wakeRecorder.ondataavailable = e => {
-      if (e.data.size > 0) wakeChunks.push(e.data);
-    };
-
-    wakeRecorder.onstop = async () => {
-      await checkForWakeWord();
-    };
-
-    // record 2.5 second chunks continuously
-    wakeRecorder.start();
-    wakeCheckTimer = setTimeout(() => {
-      if (wakeRecorder &&
-          wakeRecorder.state === "recording") {
-        wakeRecorder.stop();
-      }
-    }, 2500);
-  }
-
-  async function checkForWakeWord() {
-    if (isRecording || isWaiting || !currentSession) {
-      // don't check if already in active recording
-      setTimeout(listenForWakeWord, 500);
-      return;
-    }
-
-    const blob = new Blob(wakeChunks,
-                          { type: 'audio/webm' });
-    if (blob.size < 1000) {
-      // too small — silence
-      setTimeout(listenForWakeWord, 100);
-      return;
-    }
-
-    const fd = new FormData();
-    fd.append('audio', blob, 'wake.webm');
-
-    try {
-      const res  = await fetch('/voice/wake', {
-        method: 'POST', body: fd
-      });
-      const data = await res.json();
-
-      if (data.wake_detected) {
-        console.log('[WAKE] detected:', data.heard);
-        onWakeWordDetected(data.heard);
-      }
-    } catch(e) {
-      // silently ignore wake check errors
-    }
-
-    // continue listening
-    setTimeout(listenForWakeWord, 100);
-  }
-
-  function onWakeWordDetected(heard) {
-    const indicator = document.getElementById(
-      'wake-indicator'
-    );
+    // show indicator
+    const indicator = document.getElementById('wake-indicator');
     if (indicator) {
+      indicator.textContent = `◈ Hey Turi! (${(score*100).toFixed(0)}%)`;
       indicator.classList.add('visible');
-      setTimeout(() => {
-        indicator.classList.remove('visible');
-      }, 3000);
+      setTimeout(() => indicator.classList.remove('visible'), 3000);
     }
 
-    // extract command after wake word
-    const command = heard
-      .replace(/\b(hey\s+)?turi[,.]?\s*/gi, '')
-      .trim();
+    showNotification('Hey Turi! 👂 Listening...', 'info', 3000);
 
-    if (command.length > 3) {
-      // auto-fill and send command
-      const input = document.getElementById(
-        'message-input'
-      );
-      if (input && !isWaiting) {
-        input.value = command;
-        updateCharCount(command);
-        sendMessage();
-      }
-    } else {
-      // just wake word — start recording
-      if (!isRecording) {
-        setTimeout(startRecording, 300);
-      }
+    // auto start recording if not already recording
+    if (!isRecording && !isWaiting && currentSession) {
+      setTimeout(() => startRecording(), 200);
     }
-
-    showNotification('Hey Turi! 👂', 'info', 2000);
   }
 
 

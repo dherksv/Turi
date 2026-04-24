@@ -17,7 +17,7 @@ from mcp import init_mcp
 from mcp import call as mcp_call, list_servers as mcp_list
 from pipeline import init_audit_db, generate_report, audit_log
 from typing import Optional
-
+from wake_word.detector import start_detector, register_callback
 from telegram_bot.bot import (
     handle_update,
     set_webhook,
@@ -72,19 +72,51 @@ class SummaryRequest(BaseModel):
 async def startup():
     init_db()
     init_audit_db()
-    init_mcp()          
+    init_mcp()
     store_user_fact("User prefers concise responses")
     store_user_fact("User is building a multi-agent AI assistant")
     store_user_fact("User is based in Thiruvananthapuram Kerala India")
-    # pass sse_manager to scheduler
     asyncio.create_task(reminder_loop(sse_manager))
- # start Telegram polling if token is set
+
+    # start Telegram polling
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if token and token != "your_bot_token_here":
-        print("[TELEGRAM] starting polling mode...")
         asyncio.create_task(polling_loop())
-    else:
-        print("[TELEGRAM] no bot token — skipping")
+
+   # start wake word detector
+    current_loop = asyncio.get_event_loop()
+
+    def on_wake(prob: float):
+        """Called from background thread when wake word detected."""
+
+        async def push_to_all():
+            sessions = list(sse_manager._queues.keys())
+            print(f"[WAKE] pushing to {len(sessions)} sessions: {sessions}")
+
+            if not sessions:
+                print("[WAKE] no active SSE sessions — "
+                      "open the browser and start a session first")
+                return
+
+            for session_id in sessions:
+                await sse_manager.push(
+                    session_id,
+                    "wake_word",
+                    {
+                        "prob":    round(prob, 3),
+                        "message": "Hey Turi detected"
+                    }
+                )
+                print(f"[WAKE] pushed to session {session_id[:8]}")
+
+        # run coroutine on the main event loop from this thread
+        asyncio.run_coroutine_threadsafe(
+            push_to_all(),
+            current_loop
+        )
+
+    register_callback(on_wake)
+    start_detector(threshold=0.5, event_loop=current_loop)
 
 
 @app.get("/")
@@ -97,7 +129,15 @@ async def health():
     agents = await health_check()
     return {"api": "ok", **agents}
 
-
+@app.get("/debug/wake-threshold")
+async def set_wake_threshold(threshold: float = 0.5):
+    """Adjust wake word sensitivity. Lower = more sensitive."""
+    from wake_word.detector import _detector
+    if _detector:
+        _detector.threshold = threshold
+        return {"threshold": threshold, "status": "updated"}
+    return {"status": "detector not running"}
+    
 # ── task cancellation system ──────────────────────────────────
 _active_tasks: dict[str, asyncio.Task] = {}
 _cancelled_sessions: set[str]          = set()
@@ -905,6 +945,17 @@ async def memory_status(session_id: str = ""):
             "ALL writes to tier 2/3 go through "
             "Memory Guard (Qwen 1.5B) first"
         )
+    }
+
+
+@app.get("/debug/wake-sessions")
+async def wake_sessions():
+    """Check which sessions are listening for SSE events."""
+    sessions = list(sse_manager._queues.keys())
+    return {
+        "active_sessions": sessions,
+        "count":           len(sessions),
+        "note": "browser must be open with an active session for wake word to work"
     }
 
 # ── Telegram endpoints ────────────────────────────────────────

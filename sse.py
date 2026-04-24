@@ -33,10 +33,16 @@ class SSEManager:
                 pass
         print(f"[SSE] session {session_id[:8]} unsubscribed")
 
-    async def push(self, session_id: str, event_type: str, data: dict):
+    async def push(
+        self,
+        session_id:  str,
+        event_type:  str,
+        data:        dict
+    ):
         """Push an event to all listeners for a session."""
         if session_id not in self._queues:
-            print(f"[SSE] no listeners for session {session_id[:8]}")
+            print(f"[SSE] no listeners for session "
+                  f"{session_id[:8]} — event '{event_type}' dropped")
             return
 
         payload = json.dumps({
@@ -45,19 +51,26 @@ class SSEManager:
             "timestamp": datetime.utcnow().isoformat()
         })
 
+        listeners = self._queues[session_id]
+        print(f"[SSE] pushing '{event_type}' to "
+              f"session {session_id[:8]} "
+              f"({len(listeners)} listeners)")
+
         dead = []
-        for q in self._queues[session_id]:
+        for q in listeners:
             try:
                 await q.put(payload)
-            except Exception:
+                print(f"[SSE] delivered '{event_type}' to queue")
+            except Exception as e:
+                print(f"[SSE] queue put failed: {e}")
                 dead.append(q)
 
         for q in dead:
             try:
-                self._queues[session_id].remove(q)
+                listeners.remove(q)
             except ValueError:
                 pass
-
+            
     async def push_reminder(self, session_id: str, task: str):
         await self.push(session_id, "reminder", {"task": task})
 
