@@ -43,6 +43,13 @@ from tools.search import search_web
 from sse import sse_manager
 from scheduler import reminder_loop
 
+from llm_router import (
+    should_use_fast_path,
+    fast_respond,
+    deep_respond,
+    get_engagement_message
+)
+
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(
         asyncio.WindowsSelectorEventLoopPolicy()
@@ -473,133 +480,149 @@ async def chat_stream(req: ChatRequest):
     import time
 
     async def generate():
+        task_id   = str(uuid.uuid4())
         task_start = time.time()
-        task_id    = str(uuid.uuid4())
 
         try:
+            from llm_router import (
+                should_use_fast_path,
+                fast_respond,
+                deep_respond,
+                get_engagement_message
+            )
+
             normalized = normalize(req.message)
             intent     = classify(normalized)
 
-            # log classification
-            log_classification(
-                req.message, intent, req.session_id
-            )
-
-            print(f"\n[STREAM] '{req.message}'")
+            log_classification(req.message, intent, req.session_id)
+            print(f"\n[STREAM] '{req.message[:60]}'")
             print(f"[STREAM] → {intent['intent_type']} | "
                   f"tool={intent['tool']} | "
-                  f"conf={intent.get('confidence', 0):.2f}")
+                  f"conf={intent.get('confidence',0):.2f}")
 
-            # send classification to frontend for debug
+            # send classification debug to frontend
             yield (f"data: {_json.dumps({'debug_intent': intent})}"
                    f"\n\n")
 
+            # ── decide fast or deep path ──────────────────────
+            use_fast, reason = should_use_fast_path(
+                intent, req.message
+            )
+            print(f"[STREAM] path={'FAST' if use_fast else 'DEEP'} "
+                  f"reason={reason}")
+
+            yield (f"data: {_json.dumps({'debug_path': 'fast' if use_fast else 'deep', 'reason': reason})}"
+                   f"\n\n")
+
+            # ── tool execution ────────────────────────────────
             tool_result = None
 
             if (intent["intent_type"] == "command"
                     and intent["tool"]
                     and intent["confidence"] >= 0.70):
 
+                # send engagement message immediately
+                engagement = get_engagement_message(
+                    intent["tool"]
+                )
+                yield (f"data: {_json.dumps({'engagement': engagement})}"
+                       f"\n\n")
+
                 tool_start = time.time()
-
-                log_event("tool_dispatch", "router", {
-                    "tool":    intent["tool"],
-                    "message": req.message[:100]
-                }, session_id=req.session_id, task_id=task_id)
-
                 from tools.registry import dispatch
                 tool_result = await dispatch(
                     intent["tool"], intent
                 )
-
                 tool_ms = int((time.time() - tool_start) * 1000)
 
-                from debug_logger import log_tool_call
-                log_tool_call(
-                    tool        = intent["tool"],
-                    args        = intent,
-                    result      = tool_result,
-                    agent       = "executor",
-                    session_id  = req.session_id,
-                    task_id     = task_id,
-                    duration_ms = tool_ms,
-                    error       = tool_result.get("error")
-                                  if tool_result else None
-                )
-
                 print(f"[TOOL] {intent['tool']} → "
-                      f"status={tool_result.get('status')} "
-                      f"({tool_ms}ms)")
+                      f"{tool_result.get('status')} ({tool_ms}ms)")
 
-                yield (f"data: {_json.dumps({'tool_result': tool_result, 'debug_tool_ms': tool_ms})}"
+                yield (f"data: {_json.dumps({'tool_result': tool_result, 'tool_ms': tool_ms})}"
                        f"\n\n")
 
+            # ── build message history ─────────────────────────
             history = get_history(req.session_id, limit=10)
             history.append({
                 "role":    "user",
                 "content": req.message
             })
 
+            # inject tool context if available
             if tool_result and tool_result.get("status") == "ok":
                 import json as j
-                context = (
-                    f"Tool '{intent['tool']}' result:\n"
-                    f"{j.dumps(tool_result)[:2000]}\n\n"
-                    f"Based on this, reply to: '{req.message}'"
-                )
                 history.append({
                     "role":    "system",
-                    "content": context
+                    "content": (
+                        f"Tool '{intent['tool']}' returned:\n"
+                        f"{j.dumps(tool_result)[:1500]}\n"
+                        f"Reply naturally to: '{req.message}'"
+                    )
                 })
 
+            # ── stream response ───────────────────────────────
             full_reply = []
             llm_start  = time.time()
 
-            async for chunk in stream_chat(
-                messages     = history,
-                user_message = req.message,
-                input_mode   = "text"
-            ):
-                # check if cancelled
-                if is_cancelled(req.session_id):
-                    clear_cancel(req.session_id)
-                    yield (f"data: {_json.dumps({'stopped': True})}"
+            if use_fast:
+                # fast path — Qwen 1.5B
+                # non-streaming for fast agent (it's already fast)
+                reply = await fast_respond(
+                    messages     = history,
+                    user_message = req.message,
+                    tool_result  = tool_result,
+                    input_mode   = "text"
+                )
+                full_reply = [reply]
+                # stream word by word for visual effect
+                words = reply.split(' ')
+                for i, word in enumerate(words):
+                    chunk = word + (
+                        ' ' if i < len(words) - 1 else ''
+                    )
+                    yield (f"data: {_json.dumps({'chunk': chunk})}"
                            f"\n\n")
-                    return
+                    # tiny delay for streaming visual
+                    await asyncio.sleep(0.02)
 
-                full_reply.append(chunk)
-                yield (f"data: {_json.dumps({'chunk': chunk})}"
-                       f"\n\n")
-                
-            llm_ms   = int((time.time() - llm_start) * 1000)
+            else:
+                # deep path — Gemma 4 full streaming
+                async for chunk in stream_chat(
+                    messages     = history,
+                    user_message = req.message,
+                    input_mode   = "text"
+                ):
+                    if is_cancelled(req.session_id):
+                        clear_cancel(req.session_id)
+                        yield (f"data: {_json.dumps({'stopped': True})}"
+                               f"\n\n")
+                        return
+                    full_reply.append(chunk)
+                    yield (f"data: {_json.dumps({'chunk': chunk})}"
+                           f"\n\n")
+
             complete = "".join(full_reply)
-
-            save_message(req.session_id, "user",
-                         req.message)
-            save_message(req.session_id, "assistant",
-                         complete)
-
             total_ms = int((time.time() - task_start) * 1000)
+            llm_ms   = int((time.time() - llm_start) * 1000)
+
+            # save to memory
+            save_message(req.session_id, "user",      req.message)
+            save_message(req.session_id, "assistant", complete)
 
             log_event("request_complete", "orchestrator", {
-                "message":   req.message[:100],
+                "path":      "fast" if use_fast else "deep",
                 "tool":      intent.get("tool"),
-                "reply_len": len(complete),
+                "total_ms":  total_ms,
                 "llm_ms":    llm_ms,
-                "total_ms":  total_ms
+                "reply_len": len(complete)
             }, session_id=req.session_id, task_id=task_id)
 
-            yield (f"data: {_json.dumps({'done': True, 'full': complete, 'debug': {'total_ms': total_ms, 'llm_ms': llm_ms, 'tool': intent.get('tool'), 'tool_status': tool_result.get('status') if tool_result else None}})}"
+            yield (f"data: {_json.dumps({'done': True, 'full': complete, 'debug': {'path': 'fast' if use_fast else 'deep', 'total_ms': total_ms, 'llm_ms': llm_ms}})}"
                    f"\n\n")
 
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            log_event("stream_error", "router", {
-                "message": req.message[:100]
-            }, error=tb,
-               session_id=req.session_id,
-               task_id=task_id)
             print(f"[STREAM ERROR] {e}\n{tb}")
             yield (f"data: {_json.dumps({'error': str(e)})}"
                    f"\n\n")

@@ -1,0 +1,26 @@
+{
+  "fast_path": {
+    "avg_total_ms": 30500,
+    "avg_first_chunk_ms": 27533,
+    "median_ms": 25517,
+    "min_ms": 6847,
+    "max_ms": 53468,
+    "samples": 5
+  },
+  "deep_path": {
+    "avg_total_ms": 112881,
+    "avg_first_chunk_ms": 71984,
+    "median_ms": 108484,
+    "min_ms": 93006,
+    "max_ms": 139089,
+    "samples": 5
+  },
+  "tool_calls": {
+    "avg_total_ms": 118587,
+    "avg_first_chunk_ms": 109128,
+    "median_ms": 123666,
+    "min_ms": 96538,
+    "max_ms": 135558,
+    "samples": 3
+  }
+}

@@ -222,11 +222,25 @@ async def show_info(intent: dict) -> dict:
 
 
 async def open_app(intent: dict) -> dict:
-    return {
-        "status":  "stub",
-        "message": f"[open_app] would open: '{intent['text']}'",
-        "note":    "app launcher not yet connected"
-    }
+    """Open a Windows application by name."""
+    import re
+    text = intent["text"]
+
+    # extract app name — remove command words
+    app_name = re.sub(
+        r'^(open|launch|start|run|hey\s+turi\s+)(\s+the\s+|\s+my\s+)?',
+        '', text, flags=re.IGNORECASE
+    ).strip()
+
+    # remove trailing words
+    app_name = re.sub(
+        r'\s+(app|application|program|software|window)$',
+        '', app_name, flags=re.IGNORECASE
+    ).strip()
+
+    return await mcp_call("filesystem", "open_app", {
+        "app": app_name
+    })
 
 
 

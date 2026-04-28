@@ -1173,7 +1173,48 @@
               break;
             }
             if (event.chunk !== undefined) {
+              // clear engagement text on first real chunk
+              if (bubble._engagementShown) {
+                bubble.textContent = '';
+                bubble._engagementShown = false;
+                const cursor = document.createElement('span');
+                cursor.className = 'stream-cursor';
+                cursor.textContent = '▋';
+                cursor.style.cssText = 'animation:blink 0.8s infinite;color:var(--accent);margin-left:2px;';
+                bubble.appendChild(cursor);
+              }
               appendChunk(bubble, event.chunk);
+            }
+
+            if (event.engagement) {
+              bubble.textContent = event.engagement;
+              bubble._engagementShown = true;
+            }
+            if (event.engagement) {
+              // show engagement message while tool runs
+              appendChunk(bubble, event.engagement);
+            }
+
+            if (event.debug_path) {
+              // show which path was taken
+              const pathLabel = event.debug_path === 'fast'
+                ? '⚡ fast response'
+                : '🧠 deep reasoning';
+              console.log(`[PATH] ${pathLabel} — ${event.reason}`);
+
+              // update chat header briefly
+              const header = document.getElementById('msg-count');
+              if (header) {
+                const prev = header.textContent;
+                header.textContent = pathLabel;
+                setTimeout(() => {
+                  header.textContent = prev;
+                }, 2000);
+              }
+            }
+
+            if (event.tool_ms !== undefined) {
+              console.log(`[TOOL] executed in ${event.tool_ms}ms`);
             }
             if (event.tool_result !== undefined) {
               toolResult = event.tool_result;

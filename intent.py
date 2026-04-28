@@ -51,6 +51,11 @@ COMMAND_VERBS = {
     "read":       "file_search",
     "load":       "open_file",
 
+    "open":   "open_app",     # already there but now handles apps too
+    "launch": "open_app",
+    "start":  "open_app",
+    "run":    "open_app",
+
     # messaging
     "send":       "send_message",
     "message":    "send_message",
@@ -164,6 +169,10 @@ def classify(normalized: dict) -> dict:
         "please find":   "web_search",
         "please play":   "youtube_search",
         "please search": "web_search",
+        "open file explorer": "open_file",
+        "open the camera":    "open_app",
+        "open the app":       "open_app",
+        "start the app":      "open_app",
     }
     for i in range(len(words) - 2):
         triple = f"{words[i]} {words[i+1]} {words[i+2]}"

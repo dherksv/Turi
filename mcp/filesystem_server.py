@@ -77,18 +77,25 @@ class FileSystemMCPServer(MCPServer):
                 name        = "open_file",
                 description = "Open file in default app or VLC",
                 parameters  = {"path": "string — full file path"}
+            ),
+            MCPTool(
+            name        = "open_app",
+            description = "Open any Windows application by name",
+            parameters  = {"app": "string — app name like camera, notepad, calculator"}
+            ),
+             MCPTool(
+            name        = "open_explorer",
+            description = "Open File Explorer at a specific path",
+            parameters  = {"path": "string — folder path (optional)"}
             )
         ]
 
-    async def call_tool(
-        self, tool_name: str, args: dict
-    ) -> dict:
-        if tool_name == "search_files":
-            return await self._search(args)
-        if tool_name == "read_file":
-            return await self._read(args)
-        if tool_name == "open_file":
-            return await self._open(args)
+    async def call_tool(self, tool_name: str, args: dict) -> dict:
+        if tool_name == "search_files":   return await self._search(args)
+        if tool_name == "read_file":      return await self._read(args)
+        if tool_name == "open_file":      return await self._open(args)
+        if tool_name == "open_app":       return await self._open_app(args)
+        if tool_name == "open_explorer":  return await self._open_explorer(args)
         return {"error": f"unknown tool: {tool_name}"}
 
     async def _search(self, args: dict) -> dict:
@@ -272,7 +279,147 @@ class FileSystemMCPServer(MCPServer):
         except Exception as e:
             log_error("filesystem", e, {"path": str(path)})
             return {"status": "error", "error": str(e)}
+# open app
+    async def _open_app(self, args: dict) -> dict:
+        """Open any Windows application by name."""
+        app_name = args.get("app", "").lower().strip()
 
+        # Windows app registry — maps natural names to commands
+        APP_MAP = {
+            # system apps
+            "camera":           "start microsoft.windows.camera:",
+            "calculator":       "calc.exe",
+            "notepad":          "notepad.exe",
+            "paint":            "mspaint.exe",
+            "wordpad":          "wordpad.exe",
+            "calendar":         "start outlookcal:",
+            "mail":             "start outlookmail:",
+            "maps":             "start bingmaps:",
+            "weather":          "start bingweather:",
+            "news":             "start bingnews:",
+            "store":            "start ms-windows-store:",
+            "settings":         "start ms-settings:",
+            "clock":            "start ms-clock:",
+            "alarms":           "start ms-clock:",
+            "photos":           "start ms-photos:",
+            "movies":           "start mswindowsvideo:",
+            "groove":           "start mswindowsmusic:",
+            "music":            "start mswindowsmusic:",
+            "xbox":             "start xbox:",
+            "cortana":          "start cortana:",
+            "edge":             "start microsoft-edge:",
+            "browser":          "start microsoft-edge:",
+
+            # file system
+            "explorer":         "explorer.exe",
+            "file explorer":    "explorer.exe",
+            "files":            "explorer.exe",
+
+            # office
+            "word":             "winword.exe",
+            "excel":            "excel.exe",
+            "powerpoint":       "powerpnt.exe",
+            "outlook":          "outlook.exe",
+            "onenote":          "onenote.exe",
+            "teams":            "teams.exe",
+
+            # dev tools
+            "vscode":           "code.exe",
+            "vs code":          "code.exe",
+            "visual studio code": "code.exe",
+            "terminal":         "wt.exe",
+            "powershell":       "powershell.exe",
+            "cmd":              "cmd.exe",
+            "command prompt":   "cmd.exe",
+            "task manager":     "taskmgr.exe",
+            "device manager":   "devmgmt.msc",
+            "control panel":    "control.exe",
+            "registry":         "regedit.exe",
+
+            # media
+            "vlc":              "vlc.exe",
+            "spotify":          "spotify.exe",
+            "discord":          "discord.exe",
+            "zoom":             "zoom.exe",
+            "obs":              "obs64.exe",
+            "steam":            "steam.exe",
+
+            # utilities
+            "snipping tool":    "snippingtool.exe",
+            "snip":             "snippingtool.exe",
+            "screenshot":       "snippingtool.exe",
+            "magnifier":        "magnify.exe",
+            "narrator":         "narrator.exe",
+            "on screen keyboard": "osk.exe",
+            "character map":    "charmap.exe",
+            "paint 3d":         "paint3d.exe",
+            "3d viewer":        "start 3dviewer:",
+            "sticky notes":     "start ms-stickynotes:",
+            "whiteboard":       "start ms-whiteboard:",
+        }
+
+        # fuzzy match — find best app
+        matched_cmd  = None
+        matched_name = None
+
+        # exact match first
+        if app_name in APP_MAP:
+            matched_cmd  = APP_MAP[app_name]
+            matched_name = app_name
+        else:
+            # partial match
+            for key, cmd in APP_MAP.items():
+                if app_name in key or key in app_name:
+                    matched_cmd  = cmd
+                    matched_name = key
+                    break
+
+        if not matched_cmd:
+            # try running directly as executable
+            matched_cmd  = f"{app_name}.exe"
+            matched_name = app_name
+
+        print(f"[APP] opening '{matched_name}' → {matched_cmd}")
+        log_event("app_open", "filesystem", {
+            "requested": app_name,
+            "matched":   matched_name,
+            "command":   matched_cmd
+        })
+
+        try:
+            import subprocess
+            if matched_cmd.startswith("start "):
+                # URI scheme — use shell=True
+                subprocess.Popen(
+                    matched_cmd,
+                    shell  = True,
+                    stdout = subprocess.DEVNULL,
+                    stderr = subprocess.DEVNULL
+                )
+            else:
+                subprocess.Popen(
+                    matched_cmd,
+                    shell  = True,
+                    stdout = subprocess.DEVNULL,
+                    stderr = subprocess.DEVNULL
+                )
+
+            return {
+                "status":  "ok",
+                "message": f"Opening {matched_name}",
+                "app":     matched_name,
+                "command": matched_cmd
+            }
+
+        except Exception as e:
+            log_error("filesystem", e, {"app": app_name})
+            return {
+                "status":  "error",
+                "error":   str(e),
+                "message": f"Could not open {app_name}"
+            }
+
+    
     async def _open(self, args: dict) -> dict:
         path = Path(args.get("path", ""))
         if not path.exists():
@@ -318,3 +465,23 @@ class FileSystemMCPServer(MCPServer):
         except Exception as e:
             log_error("filesystem", e, {"path": str(path)})
             return {"status": "error", "error": str(e)}
+        
+    async def _open_explorer(self, args: dict) -> dict:
+        """Open File Explorer at specific path."""
+        import subprocess
+        path = args.get("path", "")
+        try:
+            if path and Path(path).exists():
+                subprocess.Popen(["explorer.exe", path])
+                return {
+                    "status":  "ok",
+                    "message": f"Opened File Explorer at {path}"
+                }
+            else:
+                subprocess.Popen(["explorer.exe"])
+                return {
+                    "status":  "ok",
+                    "message": "Opened File Explorer"
+                }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}    
