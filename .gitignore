@@ -1,0 +1,129 @@
+# ── Python ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# ── Virtual environments ───────────────────────────────────
+venv/
+env/
+ENV/
+.venv/
+.env.bak
+
+# ── Environment variables / secrets ────────────────────────
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+TELEGRAM_BOT_TOKEN.txt
+
+# ── Models (large binary files) ────────────────────────────
+models/
+*.gguf
+*.onnx
+*.pt
+*.bin
+*.safetensors
+wake_word/models/*.onnx
+wake_word/models/*.onnx.json
+wake_word/models/*.pt
+voice/models/*.onnx
+
+# ── Data and databases ──────────────────────────────────────
+data/*.db
+data/chroma_db/
+data/telegram_sessions.json
+data/telegram_prefs.json
+data/user_profile.json
+data/assistant.db
+data/traces.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# ── Logs ─────────────────────────────────────────────────────
+logs/
+*.log
+*.jsonl
+debug.jsonl
+errors.log
+activity.log
+audit.log
+
+# ── Audit and reports ──────────────────────────────────────
+audit/audit.db
+audit/reports/*.md
+
+# ── Checkpoints ──────────────────────────────────────────────
+checkpoints/*.json
+
+# ── Audio / media (temp files) ──────────────────────────────
+*.wav
+*.ogg
+*.webm
+*.mp3
+temp_audio/
+recordings/
+evaluation/audio/
+
+# ── Training artifacts ───────────────────────────────────────
+training_curves.png
+*.ckpt
+
+# ── Evaluation results ───────────────────────────────────────
+evaluation/results/
+results/*.json
+
+# ── IDE / editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── OS specific ───────────────────────────────────────────────
+.DS_Store
+desktop.ini
+$RECYCLE.BIN/
+
+# ── Docker ─────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Jupyter / Colab ─────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── FFmpeg / external binaries (if vendored locally) ───────────
+ffmpeg/
+piper/
+llama.cpp/
+*.exe
+
+# ── Generated frontend uploads ─────────────────────────────────
+frontend/uploads/
+
+# ── Misc temp ────────────────────────────────────────────────────
+*.tmp
+tmp/
+.cache/
+node_modules/
