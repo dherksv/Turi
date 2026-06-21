@@ -1,4 +1,3 @@
-```markdown
 # Turi — Intelligent Multi-Agent Personal Assistant
 
 > Named after **Alan Mathison Turing** (1912–1954) — father of computer science, codebreaker, and the man who asked the question this project tries to answer.
@@ -19,24 +18,24 @@ It orchestrates multiple specialized language models across a structured pipelin
 
 ## Features
 
-- **Multi-agent architecture** — five specialized models (Gemma 4, Phi-4 Mini, Qwen 2.5, Llama 3.2) each handling a specific role
-- **Voice interaction** — custom wake word detection ("Hey Turi") + Whisper STT + Piper TTS with Orion (male) and Lyra (female) voices
-- **Web search** — self-hosted SearXNG, no Google API key needed
-- **Amazon shopping** — real product search with price filters and Wilson score ranking
-- **YouTube** — search and auto-open videos and music via yt-dlp
-- **File system** — search, open, and read files; open Windows apps by name
-- **Reminders** — natural language scheduling with browser popup notifications
-- **Telegram integration** — full pipeline accessible via Telegram bot (text + voice)
-- **Three-tier memory** — isolated working memory per agent, guarded shared writes via Qwen memory guard
-- **Streaming responses** — word-by-word streaming with dual fast/deep path routing
-- **Audit log** — append-only structured log of every agent decision
-- **Failure recovery** — checkpoint-based task resumption, classified error handling
+* **Multi-agent architecture** — five specialized models (Gemma 4, Phi-4 Mini, Qwen 2.5, Llama 3.2) each handling a specific role
+* **Voice interaction** — custom wake word detection ("Hey Turi") + Whisper STT + Piper TTS with Orion (male) and Lyra (female) voices
+* **Web search** — self-hosted SearXNG, no Google API key needed
+* **Amazon shopping** — real product search with price filters and Wilson score ranking
+* **YouTube** — search and auto-open videos and music via yt-dlp
+* **File system** — search, open, and read files; open Windows apps by name
+* **Reminders** — natural language scheduling with browser popup notifications
+* **Telegram integration** — full pipeline accessible via Telegram bot (text + voice)
+* **Three-tier memory** — isolated working memory per agent, guarded shared writes via Qwen memory guard
+* **Streaming responses** — word-by-word streaming with dual fast/deep path routing
+* **Audit log** — append-only structured log of every agent decision
+* **Failure recovery** — checkpoint-based task resumption, classified error handling
 
 ---
 
 ## Architecture
 
-```
+```text
 User input (text / voice / Telegram)
         ↓
 Input normalizer → Intent classifier
@@ -60,43 +59,43 @@ Output (Browser SSE · Piper TTS · Telegram · Notifications)
 
 ## Agent Roles
 
-| Agent | Model | Role |
-|---|---|---|
-| Orchestrator | Gemma 4 E2B | Reasoning, planning, response generation |
-| Validator | Phi-4 Mini | Intent safety and correctness check |
-| Memory Guard | Qwen 2.5 1.5B | Shared memory write protection |
-| Auditor | Qwen 2.5 1.5B | Post-execution concern flagging |
-| Failure Monitor | Llama 3.2 1B | Error classification and recovery |
+| Agent           | Model         | Role                                     |
+| --------------- | ------------- | ---------------------------------------- |
+| Orchestrator    | Gemma 4 E2B   | Reasoning, planning, response generation |
+| Validator       | Phi-4 Mini    | Intent safety and correctness check      |
+| Memory Guard    | Qwen 2.5 1.5B | Shared memory write protection           |
+| Auditor         | Qwen 2.5 1.5B | Post-execution concern flagging          |
+| Failure Monitor | Llama 3.2 1B  | Error classification and recovery        |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.13, FastAPI, uvicorn |
-| LLM inference | llama-server (llama.cpp), GGUF quantized models |
-| Vector memory | ChromaDB + sentence-transformers |
-| Conversation memory | SQLite |
-| Voice STT | faster-whisper (Whisper base) |
-| Voice TTS | Piper TTS |
-| Wake word | Custom CNN-GRU ONNX model |
-| Web search | SearXNG (self-hosted Docker) |
-| Browser automation | Playwright |
-| Media search | yt-dlp |
-| Telegram | Telegram Bot API via httpx |
-| Frontend | Vanilla HTML/CSS/JS, SSE streaming |
-| Audit | Append-only SQLite + JSONL logs |
+| Layer               | Technology                                      |
+| ------------------- | ----------------------------------------------- |
+| Backend             | Python 3.13, FastAPI, uvicorn                   |
+| LLM inference       | llama-server (llama.cpp), GGUF quantized models |
+| Vector memory       | ChromaDB + sentence-transformers                |
+| Conversation memory | SQLite                                          |
+| Voice STT           | faster-whisper (Whisper base)                   |
+| Voice TTS           | Piper TTS                                       |
+| Wake word           | Custom CNN-GRU ONNX model                       |
+| Web search          | SearXNG (self-hosted Docker)                    |
+| Browser automation  | Playwright                                      |
+| Media search        | yt-dlp                                          |
+| Telegram            | Telegram Bot API via httpx                      |
+| Frontend            | Vanilla HTML/CSS/JS, SSE streaming              |
+| Audit               | Append-only SQLite + JSONL logs                 |
 
 ---
 
 ## Hardware Requirements
 
-| RAM | Recommended setup |
-|---|---|
-| 8 GB | Gemma 4 E2B Q4 + Qwen 1.5B shared — workable |
-| 16 GB | Full stack comfortable, all agents simultaneous |
-| 32 GB+ | Upgrade to larger orchestrator model |
+| RAM    | Recommended setup                               |
+| ------ | ----------------------------------------------- |
+| 8 GB   | Gemma 4 E2B Q4 + Qwen 1.5B shared — workable    |
+| 16 GB  | Full stack comfortable, all agents simultaneous |
+| 32 GB+ | Upgrade to larger orchestrator model            |
 
 Tested on: Intel i5 12th generation, 8GB RAM, Windows 11, CPU-only inference.
 
@@ -198,7 +197,7 @@ Open `http://localhost:3000` in your browser.
 
 ## Project Structure
 
-```
+```text
 assistant/
 ├── main.py                  # FastAPI application
 ├── normalizer.py            # Input cleaning
@@ -228,14 +227,14 @@ assistant/
 
 ## Evaluation Results
 
-| Metric | Result |
-|---|---|
-| Intent classification accuracy | 90.6% |
-| Tool routing accuracy | 87.5% |
-| Macro F1-score | 0.913 |
-| Human evaluation score | 4.10 / 5.00 |
-| Fast path avg latency | 30.5s (CPU-only) |
-| Wake word detection confidence | 0.92+ |
+| Metric                         | Result           |
+| ------------------------------ | ---------------- |
+| Intent classification accuracy | 90.6%            |
+| Tool routing accuracy          | 87.5%            |
+| Macro F1-score                 | 0.913            |
+| Human evaluation score         | 4.10 / 5.00      |
+| Fast path avg latency          | 30.5s (CPU-only) |
+| Wake word detection confidence | 0.92+            |
 
 *Evaluated on Intel i5 12th gen, 8GB RAM, CPU inference only.*
 *Best-case scenario conditions — all agents online, no resource contention.*
@@ -244,7 +243,7 @@ assistant/
 
 ## Telegram Bot Commands
 
-```
+```text
 /start    — introduction and capabilities
 /help     — list all commands
 /voice on — enable voice replies
@@ -259,7 +258,7 @@ assistant/
 
 ## Example Interactions
 
-```
+```text
 You:  Hey Turi, find wireless headset under 5000 rupees
 Turi: [searches Amazon, ranks by Wilson score]
       Here are the top picks under ₹5,000...
@@ -309,4 +308,3 @@ Built with: [llama.cpp](https://github.com/ggerganov/llama.cpp) · [FastAPI](htt
 ---
 
 *In memory of Alan Turing · 1912–1954*
-```
